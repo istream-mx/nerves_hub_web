@@ -39,12 +39,13 @@ config :nerves_hub, NervesHubWeb.DeviceEndpoint,
   code_reloader: false,
   check_origin: false,
   watchers: [],
+  http: [ip: {0, 0, 0, 0}, port: 4001],
   https: [
     ip: {0, 0, 0, 0},
-    port: 4001,
+    port: 4002,
     otp_app: :nerves_hub,
     thousand_island_options: [
-      transport_module: NervesHub.DeviceSSLTransport,
+      # transport_module: NervesHub.DeviceSSLTransport,
       transport_options: [
         # Enable client SSL
         # Older versions of OTP 25 may break using using devices
@@ -57,7 +58,7 @@ config :nerves_hub, NervesHubWeb.DeviceEndpoint,
         # certificate_authorities: false,
         versions: [:"tlsv1.2"],
         verify: :verify_peer,
-        verify_fun: {&NervesHub.SSL.verify_fun/3, nil},
+        # verify_fun: {&NervesHub.SSL.verify_fun/3, nil},
         fail_if_no_peer_cert: true,
         keyfile: Path.join(ssl_dir, "device.nerves-hub.org-key.pem"),
         certfile: Path.join(ssl_dir, "device.nerves-hub.org.pem"),

@@ -70,76 +70,78 @@ if config_env() == :prod do
 
     https_port = String.to_integer(System.get_env("DEVICE_PORT", "443"))
 
-    keyfile =
-      if System.get_env("DEVICE_SSL_KEY") do
-        ssl_key = System.fetch_env!("DEVICE_SSL_KEY") |> Base.decode64!()
-        :ok = File.write("/app/tmp/ssl_key.crt", ssl_key)
-        "/app/tmp/ssl_key.crt"
-      else
-        ssl_keyfile = System.get_env("DEVICE_SSL_KEYFILE", "/etc/ssl/#{host}-key.pem")
+    # keyfile =
+    #   if System.get_env("DEVICE_SSL_KEY") do
+    #     ssl_key = System.fetch_env!("DEVICE_SSL_KEY") |> Base.decode64!()
+    #     :ok = File.write("/app/tmp/ssl_key.crt", ssl_key)
+    #     "/app/tmp/ssl_key.crt"
+    #   else
+    #     ssl_keyfile = System.get_env("DEVICE_SSL_KEYFILE", "/etc/ssl/#{host}-key.pem")
 
-        if File.exists?(ssl_keyfile) do
-          ssl_keyfile
-        else
-          raise "Could not find keyfile"
-        end
-      end
+    #     if File.exists?(ssl_keyfile) do
+    #       ssl_keyfile
+    #     else
+    #       raise "Could not find keyfile"
+    #     end
+    #   end
 
-    certfile =
-      if encoded_cert = System.get_env("DEVICE_SSL_CERT") do
-        ssl_cert = Base.decode64!(encoded_cert)
-        :ok = File.write("/app/tmp/ssl_cert.crt", ssl_cert)
-        "/app/tmp/ssl_cert.crt"
-      else
-        ssl_certfile = System.get_env("DEVICE_SSL_CERTFILE", "/etc/ssl/#{host}.pem")
+    # certfile =
+    #   if encoded_cert = System.get_env("DEVICE_SSL_CERT") do
+    #     ssl_cert = Base.decode64!(encoded_cert)
+    #     :ok = File.write("/app/tmp/ssl_cert.crt", ssl_cert)
+    #     "/app/tmp/ssl_cert.crt"
+    #   else
+    #     ssl_certfile = System.get_env("DEVICE_SSL_CERTFILE", "/etc/ssl/#{host}.pem")
 
-        if File.exists?(ssl_certfile) do
-          ssl_certfile
-        else
-          raise "Could not find certfile"
-        end
-      end
+    #     if File.exists?(ssl_certfile) do
+    #       ssl_certfile
+    #     else
+    #       raise "Could not find certfile"
+    #     end
+    #   end
 
-    cacertfile =
-      if cacertfile = System.get_env("DEVICE_SSL_CACERTFILE") do
-        if File.exists?(cacertfile) do
-          cacertfile
-        else
-          raise "Could not find certfile"
-        end
-      else
-        CAStore.file_path()
-      end
+    # cacertfile =
+    #   if cacertfile = System.get_env("DEVICE_SSL_CACERTFILE") do
+    #     if File.exists?(cacertfile) do
+    #       cacertfile
+    #     else
+    #       raise "Could not find certfile"
+    #     end
+    #   else
+    #     CAStore.file_path()
+    #   end
 
     config :nerves_hub, NervesHubWeb.DeviceEndpoint,
       url: [host: host],
-      https: [
-        port: https_port,
-        otp_app: :nerves_hub,
-        thousand_island_options: [
-          transport_module: NervesHub.DeviceSSLTransport,
-          transport_options: [
-            # Enable client SSL
-            # Older versions of OTP 25 may break using using devices
-            # that support TLS 1.3 or 1.2 negotiation. To mitigate that
-            # potential error, we enforce TLS 1.2. If you're using OTP >= 25.1
-            # on all devices, then it is safe to allow TLS 1.3 by removing
-            # the versions constraint and setting `certificate_authorities: false`
-            # since we don't expect devices to send full chains to the server
-            # See https://github.com/erlang/otp/issues/6492#issuecomment-1323874205
-            #
-            # certificate_authorities: false,
-            versions: [:"tlsv1.2"],
-            verify: :verify_peer,
-            verify_fun: {&NervesHub.SSL.verify_fun/3, nil},
-            fail_if_no_peer_cert: true,
-            keyfile: keyfile,
-            certfile: certfile,
-            cacertfile: cacertfile,
-            hibernate_after: 15_000
-          ]
-        ]
-      ]
+      http: [ip: {0, 0, 0, 0}, port: 4001]
+
+    # https: [
+    #   port: https_port,
+    #   otp_app: :nerves_hub,
+    #   thousand_island_options: [
+    #     transport_module: NervesHub.DeviceSSLTransport,
+    #     transport_options: [
+    #       # Enable client SSL
+    #       # Older versions of OTP 25 may break using using devices
+    #       # that support TLS 1.3 or 1.2 negotiation. To mitigate that
+    #       # potential error, we enforce TLS 1.2. If you're using OTP >= 25.1
+    #       # on all devices, then it is safe to allow TLS 1.3 by removing
+    #       # the versions constraint and setting `certificate_authorities: false`
+    #       # since we don't expect devices to send full chains to the server
+    #       # See https://github.com/erlang/otp/issues/6492#issuecomment-1323874205
+    #       #
+    #       # certificate_authorities: false,
+    #       versions: [:"tlsv1.2"],
+    #       verify: :verify_peer,
+    #       verify_fun: {&NervesHub.SSL.verify_fun/3, nil},
+    #       fail_if_no_peer_cert: true,
+    #       keyfile: keyfile,
+    #       certfile: certfile,
+    #       cacertfile: cacertfile,
+    #       hibernate_after: 15_000
+    #     ]
+    #   ]
+    # ]
   end
 end
 
@@ -147,35 +149,35 @@ end
 # Database and Libcluster connection settings
 #
 if config_env() == :prod do
-  database_ssl_opts =
-    if System.get_env("DATABASE_PEM") do
-      db_hostname_charlist =
-        ~r/.*@(?<hostname>[^:\/]+)(?::\d+)?\/.*/
-        |> Regex.named_captures(System.fetch_env!("DATABASE_URL"))
-        |> Map.get("hostname")
-        |> to_charlist()
+  # database_ssl_opts =
+  #   if System.get_env("DATABASE_PEM") do
+  #     db_hostname_charlist =
+  #       ~r/.*@(?<hostname>[^:\/]+)(?::\d+)?\/.*/
+  #       |> Regex.named_captures(System.fetch_env!("DATABASE_URL"))
+  #       |> Map.get("hostname")
+  #       |> to_charlist()
 
-      cacerts =
-        System.fetch_env!("DATABASE_PEM")
-        |> Base.decode64!()
-        |> :public_key.pem_decode()
-        |> Enum.map(fn {_, der, _} -> der end)
+  #     cacerts =
+  #       System.fetch_env!("DATABASE_PEM")
+  #       |> Base.decode64!()
+  #       |> :public_key.pem_decode()
+  #       |> Enum.map(fn {_, der, _} -> der end)
 
-      [
-        verify: :verify_peer,
-        cacerts: cacerts,
-        server_name_indication: db_hostname_charlist
-      ]
-    else
-      [cacerts: :public_key.cacerts_get()]
-    end
+  #     [
+  #       verify: :verify_peer,
+  #       cacerts: cacerts,
+  #       server_name_indication: db_hostname_charlist
+  #     ]
+  #   else
+  #     [cacerts: :public_key.cacerts_get()]
+  #   end
 
   database_socket_options = if System.get_env("DATABASE_INET6") == "true", do: [:inet6], else: []
 
   config :nerves_hub, NervesHub.Repo,
     url: System.fetch_env!("DATABASE_URL"),
-    ssl: System.get_env("DATABASE_SSL", "true") == "true",
-    ssl_opts: database_ssl_opts,
+    # ssl: System.get_env("DATABASE_SSL", "true") == "true",
+    # ssl_opts: database_ssl_opts,
     pool_size: String.to_integer(System.get_env("DATABASE_POOL_SIZE", "20")),
     socket_options: database_socket_options,
     queue_target: 5000
@@ -185,8 +187,8 @@ if config_env() == :prod do
 
   config :nerves_hub, NervesHub.ObanRepo,
     url: System.fetch_env!("DATABASE_URL"),
-    ssl: System.get_env("DATABASE_SSL", "true") == "true",
-    ssl_opts: database_ssl_opts,
+    # ssl: System.get_env("DATABASE_SSL", "true") == "true",
+    # ssl_opts: database_ssl_opts,
     pool_size: String.to_integer(oban_pool_size),
     socket_options: database_socket_options,
     queue_target: 5000
@@ -199,22 +201,22 @@ if config_env() == :prod do
   # parsed and put together with the ssl pieces from above.
   postgres_config = Ecto.Repo.Supervisor.parse_url(System.fetch_env!("DATABASE_URL"))
 
-  libcluster_db_config =
-    [port: 5432]
-    |> Keyword.merge(postgres_config)
-    |> Keyword.take([:hostname, :username, :password, :database, :port])
-    |> Keyword.merge(ssl: System.get_env("DATABASE_SSL", "true") == "true")
-    |> Keyword.merge(ssl_opts: database_ssl_opts)
-    |> Keyword.merge(parameters: [])
-    |> Keyword.merge(channel_name: "nerves_hub_clustering")
+  # libcluster_db_config =
+  #   [port: 5432]
+  #   |> Keyword.merge(postgres_config)
+  #   |> Keyword.take([:hostname, :username, :password, :database, :port])
+  #   |> Keyword.merge(ssl: System.get_env("DATABASE_SSL", "true") == "true")
+  #   |> Keyword.merge(ssl_opts: database_ssl_opts)
+  #   |> Keyword.merge(parameters: [])
+  #   |> Keyword.merge(channel_name: "nerves_hub_clustering")
 
-  config :libcluster,
-    topologies: [
-      postgres: [
-        strategy: LibclusterPostgres.Strategy,
-        config: libcluster_db_config
-      ]
-    ]
+  # config :libcluster,
+  #   topologies: [
+  #     postgres: [
+  #       strategy: LibclusterPostgres.Strategy,
+  #       config: libcluster_db_config
+  #     ]
+  #   ]
 end
 
 ##

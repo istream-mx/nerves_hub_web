@@ -15,6 +15,11 @@ defmodule NervesHubWeb.DeviceEndpoint do
     ]
   )
 
+  socket("/device-socket", NervesHubWeb.DeviceSocketSharedSecretAuth,
+    websocket: [connect_info: [:x_headers]],
+    longpoll: true
+  )
+
   plug(Sentry.PlugContext)
 
   plug(NervesHubWeb.Plugs.Logger)
