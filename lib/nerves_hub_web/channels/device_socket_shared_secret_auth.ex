@@ -25,12 +25,14 @@ defmodule NervesHubWeb.DeviceSocketSharedSecretAuth do
          {:ok, identifier} <-
            Crypto.verify(auth.secret, salt, signature, verification_opts)
            |> IO.inspect(label: "verify"),
-         {:ok, device} <- get_or_maybe_create_device(auth, identifier) do
+         {:ok, device} <-
+           get_or_maybe_create_device(auth, identifier) |> IO.inspect(label: "device") do
       socket =
         socket
         |> assign(:device, device)
         |> assign(:reference_id, generate_reference_id())
 
+      IO.inspect("todo ok")
       {:ok, socket}
     end
   end
