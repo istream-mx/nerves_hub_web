@@ -17,11 +17,14 @@ defmodule NervesHubWeb.DeviceSocketSharedSecretAuth do
     IO.inspect(headers)
 
     with true <- enabled?(),
-         {:ok, key, salt, verification_opts} <- decode_from_headers(headers) |> IO.inspect(),
-         {:ok, auth} <- get_shared_secret_auth(key),
-         {:ok, signature} <- Map.fetch(headers, "x-nh-signature"),
+         {:ok, key, salt, verification_opts} <-
+           decode_from_headers(headers) |> IO.inspect(label: "decode"),
+         {:ok, auth} <- get_shared_secret_auth(key) |> IO.inspect(label: "auth"),
+         {:ok, signature} <-
+           Map.fetch(headers, "x-nh-signature") |> IO.inspect(label: "signature"),
          {:ok, identifier} <-
-           Crypto.verify(auth.secret, salt, signature, verification_opts),
+           Crypto.verify(auth.secret, salt, signature, verification_opts)
+           |> IO.inspect(label: "verify"),
          {:ok, device} <- get_or_maybe_create_device(auth, identifier) do
       socket =
         socket
