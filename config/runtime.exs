@@ -68,7 +68,7 @@ if config_env() == :prod do
         For example: device.mynerveshub.com
         """
 
-    https_port = String.to_integer(System.get_env("DEVICE_PORT", "443"))
+    # https_port = String.to_integer(System.get_env("DEVICE_PORT", "443"))
 
     # keyfile =
     #   if System.get_env("DEVICE_SSL_KEY") do
@@ -178,7 +178,14 @@ if config_env() == :prod do
     url: System.fetch_env!("DATABASE_URL"),
     # ssl: System.get_env("DATABASE_SSL", "true") == "true",
     # ssl_opts: database_ssl_opts,
-    pool_size: String.to_integer(System.get_env("DATABASE_POOL_SIZE", "20")),
+    pool_size:
+      String.to_integer(
+        System.get_env(
+          "DATABASE_
+    POOL_SIZE",
+          "20"
+        )
+      ),
     socket_options: database_socket_options,
     queue_target: 5000
 
