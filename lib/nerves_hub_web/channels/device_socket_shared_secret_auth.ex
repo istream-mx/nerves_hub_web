@@ -14,25 +14,23 @@ defmodule NervesHubWeb.DeviceSocketSharedSecretAuth do
 
   def connect(_params, socket, %{x_headers: headers}) do
     headers = Map.new(headers)
-    IO.inspect(headers)
 
     with true <- enabled?(),
          {:ok, key, salt, verification_opts} <-
-           decode_from_headers(headers) |> IO.inspect(label: "decode"),
-         {:ok, auth} <- get_shared_secret_auth(key) |> IO.inspect(label: "auth"),
+           decode_from_headers(headers) ,
+         {:ok, auth} <- get_shared_secret_auth(key),
          {:ok, signature} <-
-           Map.fetch(headers, "x-nh-signature") |> IO.inspect(label: "signature"),
+           Map.fetch(headers, "x-nh-signature") ,
          {:ok, identifier} <-
-           Crypto.verify(auth.secret, salt, signature, verification_opts)
-           |> IO.inspect(label: "verify"),
+           Crypto.verify(auth.secret, salt, signature, verification_opts),
          {:ok, device} <-
-           get_or_maybe_create_device(auth, identifier) |> IO.inspect(label: "device") do
+           get_or_maybe_create_device(auth, identifier)  do
       socket =
         socket
         |> assign(:device, device)
         |> assign(:reference_id, generate_reference_id())
 
-      IO.inspect("todo ok")
+
       {:ok, socket}
     end
   end
