@@ -7,7 +7,7 @@ defmodule NervesHubWeb.DeviceChannelTest do
   alias NervesHub.Devices
   alias NervesHub.Fixtures
   alias NervesHubWeb.DeviceChannel
-  alias NervesHubWeb.DeviceSocketCertAuth, as: DeviceSocket
+  alias NervesHubWeb.DeviceSocket
 
   test "basic connection to the channel" do
     user = Fixtures.user_fixture()
@@ -57,6 +57,29 @@ defmodule NervesHubWeb.DeviceChannelTest do
     assert_push("fwup_public_keys", %{keys: [_]})
   end
 
+  test "archive_public_keys requested on connect" do
+    user = Fixtures.user_fixture()
+    {device, _firmware, _deployment} = device_fixture(user, %{identifier: "123"})
+    %{db_cert: certificate, cert: _cert} = Fixtures.device_certificate_fixture(device)
+
+    params =
+      for {k, v} <- Map.from_struct(device.firmware_metadata), into: %{} do
+        case k do
+          :uuid -> {"nerves_fw_uuid", Ecto.UUID.generate()}
+          _ -> {"nerves_fw_#{k}", v}
+        end
+      end
+
+    params = Map.put(params, "archive_public_keys", "on_connect")
+
+    {:ok, socket} =
+      connect(DeviceSocket, %{}, connect_info: %{peer_data: %{ssl_cert: certificate.der}})
+
+    {:ok, %{}, _socket} = subscribe_and_join(socket, DeviceChannel, "device", params)
+
+    assert_push("archive_public_keys", %{keys: [_]})
+  end
+
   test "update_available on connect" do
     user = Fixtures.user_fixture()
     {device, _firmware, deployment} = device_fixture(user, %{identifier: "123"})
@@ -79,6 +102,32 @@ defmodule NervesHubWeb.DeviceChannelTest do
     {:ok, %{}, _socket} = subscribe_and_join(socket, DeviceChannel, "device", params)
 
     assert_push("update", %{})
+  end
+
+  test "devices can request available updates via check_update_available" do
+    user = Fixtures.user_fixture()
+    {device, _firmware, deployment} = device_fixture(user, %{identifier: "123"})
+    %{db_cert: certificate, cert: _cert} = Fixtures.device_certificate_fixture(device)
+
+    assert {:ok, device} = Devices.update_device(device, %{deployment_id: deployment.id})
+    assert device.updates_enabled
+
+    params =
+      for {k, v} <- Map.from_struct(device.firmware_metadata), into: %{} do
+        case k do
+          :uuid -> {"nerves_fw_uuid", Ecto.UUID.generate()}
+          _ -> {"nerves_fw_#{k}", v}
+        end
+      end
+
+    {:ok, socket} =
+      connect(DeviceSocket, %{}, connect_info: %{peer_data: %{ssl_cert: certificate.der}})
+
+    {:ok, %{}, socket} = subscribe_and_join(socket, DeviceChannel, "device", params)
+
+    ref = push(socket, "check_update_available", %{"value" => 10})
+
+    assert_reply(ref, :ok, %NervesHub.Devices.UpdatePayload{update_available: true})
   end
 
   test "the first fwup_progress marks an update as happening" do
@@ -240,6 +289,39 @@ defmodule NervesHubWeb.DeviceChannelTest do
 
     socket_alpha = :sys.get_state(socket_alpha.channel_pid)
     refute is_nil(socket_alpha.assigns.device.deployment_id)
+  end
+
+  describe "unhandled messages are caught" do
+    test "handle_info" do
+      user = Fixtures.user_fixture()
+      {device, _firmware, _deployment} = device_fixture(user, %{identifier: "123"})
+      %{db_cert: certificate, cert: _cert} = Fixtures.device_certificate_fixture(device)
+
+      {:ok, socket} =
+        connect(DeviceSocket, %{}, connect_info: %{peer_data: %{ssl_cert: certificate.der}})
+
+      {:ok, _join_reply, socket} =
+        subscribe_and_join(socket, DeviceChannel, "device")
+
+      send(socket.channel_pid, {"do_you_like_dem_apples", %{"apples" => 5}})
+      Process.sleep(100)
+      assert_online(device)
+    end
+
+    test "handle_in" do
+      user = Fixtures.user_fixture()
+      {device, _firmware, _deployment} = device_fixture(user, %{identifier: "123"})
+      %{db_cert: certificate, cert: _cert} = Fixtures.device_certificate_fixture(device)
+
+      {:ok, socket} =
+        connect(DeviceSocket, %{}, connect_info: %{peer_data: %{ssl_cert: certificate.der}})
+
+      {:ok, _join_reply, socket} =
+        subscribe_and_join(socket, DeviceChannel, "device")
+
+      ref = push(socket, "do_you_like_dem_apples", %{"apples" => 5})
+      refute_reply(ref, %{})
+    end
   end
 
   def device_fixture(user, device_params \\ %{}, org \\ nil) do

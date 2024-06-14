@@ -12,20 +12,21 @@ end
 config :nerves_hub,
   app: nerves_hub_app,
   deploy_env: System.get_env("DEPLOY_ENV", to_string(config_env())),
-  from_email: System.get_env("FROM_EMAIL", "no-reply@nerves-hub.org")
+  from_email: System.get_env("FROM_EMAIL", "no-reply@nerves-hub.org"),
+  email_sender: System.get_env("EMAIL_SENDER", "NervesHub"),
+  support_email_platform_name: System.get_env("SUPPORT_EMAIL_PLATFORM_NAME", "NervesHub"),
+  support_email_address: System.get_env("SUPPORT_EMAIL_ADDRESS"),
+  support_email_signoff: System.get_env("SUPPORT_EMAIL_SIGNOFF"),
+  device_endpoint_redirect:
+    System.get_env("DEVICE_ENDPOINT_REDIRECT", "https://docs.nerves-hub.org/"),
+  admin_auth: [
+    username: System.get_env("ADMIN_AUTH_USERNAME"),
+    password: System.get_env("ADMIN_AUTH_PASSWORD")
+  ]
 
 if level = System.get_env("LOG_LEVEL") do
   config :logger, level: String.to_atom(level)
 end
-
-dns_cluster_query =
-  if System.get_env("DNS_CLUSTER_QUERY") do
-    System.get_env("DNS_CLUSTER_QUERY") |> String.split(",")
-  else
-    nil
-  end
-
-config :nerves_hub, dns_cluster_query: dns_cluster_query
 
 ##
 # Web and Device endpoints
@@ -55,9 +56,6 @@ if config_env() == :prod do
         signing_salt: System.fetch_env!("LIVE_VIEW_SIGNING_SALT")
       ],
       server: true
-
-    config :nerves_hub, NervesHubWeb.DeviceSocketSharedSecretAuth,
-      enabled: System.get_env("DEVICE_SHARED_SECRET_AUTH", "false") == "true"
   end
 
   if nerves_hub_app in ["all", "device"] do
@@ -70,6 +68,7 @@ if config_env() == :prod do
 
     # https_port = String.to_integer(System.get_env("DEVICE_PORT", "443"))
 
+
     # keyfile =
     #   if System.get_env("DEVICE_SSL_KEY") do
     #     ssl_key = System.fetch_env!("DEVICE_SSL_KEY") |> Base.decode64!()
@@ -78,12 +77,14 @@ if config_env() == :prod do
     #   else
     #     ssl_keyfile = System.get_env("DEVICE_SSL_KEYFILE", "/etc/ssl/#{host}-key.pem")
 
+
     #     if File.exists?(ssl_keyfile) do
     #       ssl_keyfile
     #     else
     #       raise "Could not find keyfile"
     #     end
     #   end
+
 
     # certfile =
     #   if encoded_cert = System.get_env("DEVICE_SSL_CERT") do
@@ -92,6 +93,7 @@ if config_env() == :prod do
     #     "/app/tmp/ssl_cert.crt"
     #   else
     #     ssl_certfile = System.get_env("DEVICE_SSL_CERTFILE", "/etc/ssl/#{host}.pem")
+
 
     #     if File.exists?(ssl_certfile) do
     #       ssl_certfile
@@ -111,8 +113,33 @@ if config_env() == :prod do
     #     CAStore.file_path()
     #   end
 
+    transport_options = [
+      verify: :verify_peer,
+      verify_fun: {&NervesHub.SSL.verify_fun/3, nil},
+      fail_if_no_peer_cert: false,
+      keyfile: keyfile,
+      certfile: certfile,
+      cacertfile: cacertfile,
+      hibernate_after: 15_000
+    ]
+
+    # Older versions of OTP 25 may break using using devices
+    # that support TLS 1.3 or 1.2 negotiation. To mitigate that
+    # potential error, by default we enforce TLS 1.2.
+    # If you're using OTP >= 25.1 on all devices, then it is safe to
+    # allow TLS 1.3 and setting `certificate_authorities: false` since we
+    # don't expect devices to send full chains to the server
+    # See https://github.com/erlang/otp/issues/6492#issuecomment-1323874205
+    transport_options =
+      if System.get_env("DEVICE_ENABLE_TLS_13", "false") == "true" do
+        transport_options ++ [certificate_authorities: false]
+      else
+        transport_options ++ [versions: [:"tlsv1.2"]]
+      end
+
     config :nerves_hub, NervesHubWeb.DeviceEndpoint,
       url: [host: host],
+
       http: [ip: {0, 0, 0, 0}, port: 4001]
 
     # https: [
@@ -142,7 +169,13 @@ if config_env() == :prod do
     #     ]
     #   ]
     # ]
+
   end
+
+  config :nerves_hub, NervesHubWeb.DeviceSocket,
+    shared_secrets: [
+      enabled: System.get_env("DEVICE_SHARED_SECRETS_ENABLED", "false") == "true"
+    ]
 end
 
 ##
@@ -249,6 +282,16 @@ if config_env() == :prod do
           secret_access_key: System.fetch_env!("S3_SECRET_ACCESS_KEY")
       end
 
+      if System.get_env("S3_BUCKET_AS_HOST", "false") == "true" do
+        config :nerves_hub, NervesHub.Firmwares.Upload.S3,
+          presigned_url_opts: [
+            virtual_host: true,
+            bucket_as_host: true
+          ]
+      else
+        config :nerves_hub, NervesHub.Firmwares.Upload.S3, presigned_url_opts: []
+      end
+
       config :ex_aws, :s3, bucket: System.fetch_env!("S3_BUCKET_NAME")
 
       if region = System.get_env("S3_REGION") do
@@ -297,9 +340,10 @@ if config_env() == :prod do
     config :nerves_hub, NervesHub.SwooshMailer,
       adapter: Swoosh.Adapters.SMTP,
       relay: System.fetch_env!("SMTP_SERVER"),
-      port: System.fetch_env!("SMTP_PORT"),
+      port: System.fetch_env!("SMTP_PORT") |> String.to_integer(),
       username: System.fetch_env!("SMTP_USERNAME"),
       password: System.fetch_env!("SMTP_PASSWORD"),
+      auth: :always,
       ssl: System.get_env("SMTP_SSL", "false") == "true",
       tls: :always,
       tls_options: [

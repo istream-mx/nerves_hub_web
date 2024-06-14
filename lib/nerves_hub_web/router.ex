@@ -1,6 +1,8 @@
 defmodule NervesHubWeb.Router do
   use NervesHubWeb, :router
 
+  import Phoenix.LiveDashboard.Router
+
   pipeline :browser do
     plug(:accepts, ["html", "json"])
     plug(:fetch_session)
@@ -15,6 +17,10 @@ defmodule NervesHubWeb.Router do
 
   pipeline :logged_in do
     plug(NervesHubWeb.Plugs.EnsureLoggedIn)
+  end
+
+  pipeline :admins_only do
+    plug(NervesHubWeb.Plugs.AdminBasicAuth)
   end
 
   pipeline :org do
@@ -74,6 +80,7 @@ defmodule NervesHubWeb.Router do
       post("/:identifier/reconnect", DeviceController, :reconnect)
       post("/:identifier/code", DeviceController, :code)
       post("/:identifier/upgrade", DeviceController, :upgrade)
+      post("/:identifier/move", DeviceController, :move)
       delete("/:identifier/penalty", DeviceController, :penalty)
 
       get("/:identifier/scripts", ScriptController, :index)
@@ -191,12 +198,6 @@ defmodule NervesHubWeb.Router do
 
     get("/invite/:token", AccountController, :invite)
     post("/invite/:token", AccountController, :accept_invite)
-
-    scope "/policy" do
-      get("/tos", PolicyController, :tos)
-      get("/privacy", PolicyController, :privacy)
-      get("/coc", PolicyController, :coc)
-    end
 
     get("/nerves_key", NervesKeyController, :index)
   end
@@ -340,6 +341,12 @@ defmodule NervesHubWeb.Router do
       pipe_through([:browser])
 
       forward("/mailbox", Plug.Swoosh.MailboxPreview)
+      live_dashboard("/dashboard")
+    end
+  else
+    scope "/" do
+      pipe_through([:browser, :admins_only])
+      live_dashboard("/status/dashboard")
     end
   end
 end

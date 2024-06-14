@@ -46,7 +46,11 @@ defmodule NervesHubWeb.DeviceChannel do
       |> Repo.preload(deployment: [:archive, :firmware])
 
     if params["fwup_public_keys"] == "on_connect" do
-      send_fwup_public_keys(device, socket)
+      send_public_keys(device, socket, "fwup_public_keys")
+    end
+
+    if params["archive_public_keys"] == "on_connect" do
+      send_public_keys(device, socket, "archive_public_keys")
     end
 
     # clear out any inflight updates, there shouldn't be one at this point
@@ -82,6 +86,7 @@ defmodule NervesHubWeb.DeviceChannel do
 
     ## After join
     :telemetry.execute([:nerves_hub, :devices, :connect], %{count: 1}, %{
+      ref_id: socket.assigns.reference_id,
       identifier: device.identifier,
       firmware_uuid: device.firmware_metadata.uuid
     })
@@ -340,10 +345,10 @@ defmodule NervesHubWeb.DeviceChannel do
   def handle_info(msg, socket) do
     # Ignore unhandled messages so that it doesn't crash the link process
     # preventing cascading problems.
-    Logger.warning("[DeviceChannel] Unhandled message! - #{inspect(msg)}")
+    Logger.warning("[DeviceChannel] Unhandled handle_info message! - #{inspect(msg)}")
 
     _ =
-      Sentry.capture_message("[DeviceChannel] Unhandled message!",
+      Sentry.capture_message("[DeviceChannel] Unhandled handle_info message!",
         extra: %{message: msg},
         result: :none
       )
@@ -395,12 +400,43 @@ defmodule NervesHubWeb.DeviceChannel do
     {:noreply, socket}
   end
 
+  def handle_in("check_update_available", _params, socket) do
+    device =
+      socket.assigns.device
+      |> Devices.verify_deployment()
+      |> Deployments.set_deployment()
+      |> Repo.preload(:org)
+      |> Repo.preload(deployment: [:archive, :firmware])
+
+    # Let the orchestrator handle this going forward ?
+    update_payload = Devices.resolve_update(device)
+
+    {:reply, {:ok, update_payload}, socket}
+  end
+
   def handle_in("rebooting", _, socket) do
+    {:noreply, socket}
+  end
+
+  def handle_in(msg, params, socket) do
+    # Ignore unhandled messages so that it doesn't crash the link process
+    # preventing cascading problems.
+    Logger.warning(
+      "[DeviceChannel] Unhandled handle_in message! - #{inspect(msg)} - #{inspect(params)}"
+    )
+
+    _ =
+      Sentry.capture_message("[DeviceChannel] Unhandled message!",
+        extra: %{message: msg},
+        result: :none
+      )
+
     {:noreply, socket}
   end
 
   def terminate(_reason, %{assigns: %{device: device}} = socket) do
     :telemetry.execute([:nerves_hub, :devices, :disconnect], %{count: 1}, %{
+      ref_id: socket.assigns.reference_id,
       identifier: device.identifier
     })
 
@@ -422,10 +458,10 @@ defmodule NervesHubWeb.DeviceChannel do
     Phoenix.PubSub.unsubscribe(NervesHub.PubSub, topic)
   end
 
-  defp send_fwup_public_keys(device, socket) do
+  defp send_public_keys(device, socket, key_type) do
     org_keys = NervesHub.Accounts.list_org_keys(device.org)
 
-    push(socket, "fwup_public_keys", %{
+    push(socket, key_type, %{
       keys: Enum.map(org_keys, fn ok -> ok.key end)
     })
   end
