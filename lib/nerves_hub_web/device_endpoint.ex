@@ -33,7 +33,6 @@ defmodule NervesHubWeb.DeviceEndpoint do
 
   plug(NervesHubWeb.Plugs.ImAlive)
 
-
   plug(Sentry.PlugContext)
 
   plug(NervesHubWeb.Plugs.Logger)

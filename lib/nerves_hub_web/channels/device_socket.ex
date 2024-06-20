@@ -13,7 +13,8 @@ defmodule NervesHubWeb.DeviceSocket do
   channel("device", NervesHubWeb.DeviceChannel)
 
 
-  @default_max_age 60 * 60 * 60 * 60
+  # Default 90 seconds max age for the signature
+  @default_max_hmac_age 60 * 60 * 60 * 60
 
   # Used by Devices connecting with SSL certificates
   def connect(_params, socket, %{peer_data: %{ssl_cert: ssl_cert}}) when not is_nil(ssl_cert) do
@@ -22,8 +23,6 @@ defmodule NervesHubWeb.DeviceSocket do
     |> case do
       {:ok, %{device: %Device{} = device}} ->
         reference_id = Base.encode32(:crypto.strong_rand_bytes(2), padding: false)
-
-
         socket =
           socket
           |> assign(:device, device)
