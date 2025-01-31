@@ -2,6 +2,7 @@ defmodule NervesHub.Scripts do
   import Ecto.Query
 
   alias NervesHub.Scripts.Script
+
   alias NervesHub.Repo
 
   def all_by_product(product) do
@@ -13,6 +14,10 @@ defmodule NervesHub.Scripts do
 
   def get!(id) do
     Repo.get!(Script, id)
+  end
+
+  def get_by_product_and_id!(product, id) do
+    Repo.get_by!(Script, id: id, product_id: product.id)
   end
 
   def get(product, id) do

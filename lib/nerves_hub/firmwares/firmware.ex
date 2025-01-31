@@ -2,7 +2,6 @@ defmodule NervesHub.Firmwares.Firmware do
   use Ecto.Schema
 
   import Ecto.Changeset
-  import Ecto.Query
 
   alias NervesHub.Accounts.Org
   alias NervesHub.Accounts.OrgKey
@@ -61,6 +60,8 @@ defmodule NervesHub.Firmwares.Firmware do
     field(:vcs_identifier, :string)
     field(:version, :string)
 
+    field(:install_count, :integer, virtual: true)
+
     timestamps()
   end
 
@@ -84,10 +85,5 @@ defmodule NervesHub.Firmwares.Firmware do
     firmware
     |> cast(params, @required_params ++ @optional_params)
     |> no_assoc_constraint(:deployments, message: "Firmware has associated deployments")
-  end
-
-  def with_product(firmware_query) do
-    firmware_query
-    |> preload(:product)
   end
 end

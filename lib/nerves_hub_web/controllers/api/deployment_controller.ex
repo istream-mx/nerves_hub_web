@@ -14,7 +14,7 @@ defmodule NervesHubWeb.API.DeploymentController do
   @whitelist_fields [:name, :org_id, :firmware_id, :conditions, :is_active]
 
   def index(%{assigns: %{product: product}} = conn, _params) do
-    deployments = Deployments.get_deployments_by_product(product.id)
+    deployments = Deployments.get_deployments_by_product(product)
     render(conn, "index.json", deployments: deployments)
   end
 
@@ -32,7 +32,7 @@ defmodule NervesHubWeb.API.DeploymentController do
           AuditLogs.audit!(
             user,
             deployment,
-            "user #{user.username} created deployment #{deployment.name}"
+            "#{user.name} created deployment #{deployment.name}"
           )
 
           conn
@@ -64,7 +64,7 @@ defmodule NervesHubWeb.API.DeploymentController do
       AuditLogs.audit!(
         user,
         deployment,
-        "user #{user.username} updated deployment #{deployment.name}"
+        "#{user.name} updated deployment #{deployment.name}"
       )
 
       render(conn, "show.json", deployment: updated_deployment)

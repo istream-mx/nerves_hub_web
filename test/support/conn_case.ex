@@ -31,7 +31,7 @@ defmodule NervesHubWeb.ConnCase do
   setup tags do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(NervesHub.Repo)
 
-    unless tags[:async] do
+    if !tags[:async] do
       Ecto.Adapters.SQL.Sandbox.mode(NervesHub.Repo, {:shared, self()})
     end
 
@@ -77,14 +77,14 @@ defmodule NervesHubWeb.APIConnCase do
   setup tags do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(NervesHub.Repo)
 
-    unless tags[:async] do
+    if !tags[:async] do
       Ecto.Adapters.SQL.Sandbox.mode(NervesHub.Repo, {:shared, self()})
     end
 
     user = Fixtures.user_fixture()
     {:ok, token} = NervesHub.Accounts.create_user_token(user, "test-token")
 
-    user2 = Fixtures.user_fixture(%{username: user.username <> "0"})
+    user2 = Fixtures.user_fixture()
     {:ok, token2} = NervesHub.Accounts.create_user_token(user2, "test-token")
 
     org = Fixtures.org_fixture(user)

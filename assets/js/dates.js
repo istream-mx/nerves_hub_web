@@ -1,4 +1,4 @@
-const moment = require('moment')
+import moment from "moment"
 
 const formatDateTime = datetime => {
   /*
@@ -8,17 +8,38 @@ const formatDateTime = datetime => {
   */
   datetime = datetime
     .trim()
-    .split(' ')
-    .join('T')
+    .split(" ")
+    .join("T")
 
-  if (datetime === 'never' || datetime === '') {
+  if (datetime === "never" || datetime === "") {
     return datetime
   } else {
     return moment
       .utc(datetime)
       .local()
-      .format('MMM Do, YYYY [at] h:mma')
+      .format("MMM Do, YYYY [at] h:mma")
   }
 }
 
-module.exports = { formatDateTime }
+const formatDate = datetime => {
+  /*
+    Safari wants strict iso8601 format "YYYY-MM-DDTHH:MM:SSZ",
+    but elixir to_string default supplies as "YYYY-MM-DD HH:MM:SSZ".
+    So this attempts to transform the dates if needed
+  */
+  datetime = datetime
+    .trim()
+    .split(" ")
+    .join("T")
+
+  if (datetime === "never" || datetime === "") {
+    return datetime
+  } else {
+    return moment
+      .utc(datetime)
+      .local()
+      .format("MMM Do, YYYY")
+  }
+}
+
+export default { formatDate, formatDateTime }

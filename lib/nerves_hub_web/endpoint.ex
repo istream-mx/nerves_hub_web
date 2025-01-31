@@ -1,11 +1,17 @@
 defmodule NervesHubWeb.Endpoint do
-  use Phoenix.Endpoint, otp_app: :nerves_hub
   use Sentry.PlugCapture
+  use Phoenix.Endpoint, otp_app: :nerves_hub
+
+  alias NervesHub.Helpers.WebsocketConnectionError
+
+  def fetch_signing_salt() do
+    Application.get_env(:nerves_hub, __MODULE__)[:live_view][:signing_salt]
+  end
 
   @session_options [
     store: :cookie,
     key: "_nerves_hub_key",
-    signing_salt: "1CPjriVa"
+    signing_salt: {__MODULE__, :fetch_signing_salt, []}
   ]
 
   socket("/live", Phoenix.LiveView.Socket, websocket: [connect_info: [session: @session_options]])
@@ -14,9 +20,18 @@ defmodule NervesHubWeb.Endpoint do
     websocket: [connect_info: [session: @session_options]]
   )
 
-  # socket("/device-socket", NervesHubWeb.DeviceSocketSharedSecretAuth,
-  #   websocket: [connect_info: [:x_headers]]
-  # )
+
+  socket(
+    "/device-socket",
+    NervesHubWeb.DeviceSocket,
+    websocket: [
+      connect_info: [:peer_data, :x_headers],
+      compress: true,
+      timeout: 180_000,
+      fullsweep_after: 0,
+      error_handler: {WebsocketConnectionError, :handle_error, []}
+    ]
+  )
 
   # Serve at "/" the static files from "priv/static" directory.
   #
@@ -27,7 +42,7 @@ defmodule NervesHubWeb.Endpoint do
     at: "/",
     from: :nerves_hub,
     gzip: false,
-    only: ~w(css fonts images js favicon.ico robots.txt)
+    only: ~w(assets css fonts images js favicon.ico robots.txt geo)
   )
 
   plug(NervesHubWeb.Plugs.ConfigureUploads)
@@ -45,17 +60,21 @@ defmodule NervesHubWeb.Endpoint do
     plug(Phoenix.CodeReloader)
   end
 
+  plug(Phoenix.LiveDashboard.RequestLogger,
+    param_key: "request_logger",
+    cookie_key: "request_logger"
+  )
+
+  plug(NervesHubWeb.Plugs.ImAlive)
+
   plug(Plug.RequestId)
   plug(Plug.Telemetry, event_prefix: [:phoenix, :endpoint])
-  plug(NervesHubWeb.Plugs.Logger)
 
   plug(
     Plug.Parsers,
-    parsers: [:urlencoded, :multipart, :json],
+    parsers: [:urlencoded, NervesHubWeb.DymanicConfigMultipart, :json],
     pass: ["*/*"],
-    # 1GB
-    length: 1_073_741_824,
-    json_decoder: Jason
+    json_decoder: Phoenix.json_library()
   )
 
   plug(Sentry.PlugContext)

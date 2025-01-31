@@ -1,7 +1,9 @@
 defmodule NervesHubWeb.API.DeploymentControllerTest do
   use NervesHubWeb.APIConnCase, async: true
 
-  alias NervesHub.{AuditLogs, Deployments.Deployment, Fixtures}
+  alias NervesHub.AuditLogs
+  alias NervesHub.Deployments.Deployment
+  alias NervesHub.Fixtures
 
   describe "index" do
     test "lists all deployments", %{conn: conn, org: org, product: product} do
@@ -12,7 +14,7 @@ defmodule NervesHubWeb.API.DeploymentControllerTest do
 
   describe "create deployment" do
     setup context do
-      org_key = Fixtures.org_key_fixture(context.org)
+      org_key = Fixtures.org_key_fixture(context.org, context.user)
       firmware = Fixtures.firmware_fixture(org_key, context.product)
 
       params = %{
@@ -148,8 +150,8 @@ defmodule NervesHubWeb.API.DeploymentControllerTest do
     end
   end
 
-  defp create_deployment(%{org: org, product: product}) do
-    org_key = Fixtures.org_key_fixture(org)
+  defp create_deployment(%{user: user, org: org, product: product}) do
+    org_key = Fixtures.org_key_fixture(org, user)
     firmware = Fixtures.firmware_fixture(org_key, product)
     deployment = Fixtures.deployment_fixture(org, firmware)
     {:ok, %{deployment: deployment}}

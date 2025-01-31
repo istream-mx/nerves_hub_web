@@ -83,38 +83,84 @@ defmodule NervesHubWeb.LayoutView do
 
     anchor = if opts.anchor, do: "##{opts.anchor}", else: ""
 
-    content_tag(:div, class: "btn-group btn-group-toggle") do
-      opts
-      |> Scrivener.HTML.raw_pagination_links(distance: Map.get(opts, :distance, 8))
-      |> Enum.map(fn {text, page} ->
-        if text == :ellipsis do
-          content_tag(:span, page, class: "btn btn-secondary btn-sm")
-        else
-          link(text,
-            to: "?page=#{page}#{anchor}",
-            class: "btn btn-secondary btn-sm #{if page == opts.page_number, do: "active"}"
-          )
-        end
-      end)
-    end
+    distance = 8
+    start_range = round(max(1, opts.page_number - distance / 2))
+    end_range = min(round(start_range + distance), opts.total_pages)
+
+    assigns =
+      Map.merge(opts, %{
+        start_range: start_range,
+        end_range: end_range,
+        distance: distance,
+        anchor: anchor
+      })
+
+    ~H"""
+    <div class="btn-group btn-group-toggle btn-group-gap">
+      <div :if={@page_number > 1}>
+        {link("&lt;&lt;",
+          to: "?page=#{@page_number - 1}#{@anchor}",
+          class: "btn btn-secondary btn-sm"
+        )}
+      </div>
+      <div :for={page <- @start_range..@end_range}>
+        {link("#{page}",
+          to: "?page=#{page}#{@anchor}",
+          class: "btn btn-secondary btn-sm #{if page == @page_number, do: "active"}"
+        )}
+      </div>
+      <div :if={@total_pages > @distance}>
+        <span class="btn btn-secondary btn-sm">…</span>
+      </div>
+      <div :if={@page_number < @total_pages}>
+        {link("&gt;&gt;",
+          to: "?page=#{@page_number + 1}#{@anchor}",
+          class: "btn btn-secondary btn-sm"
+        )}
+      </div>
+    </div>
+    """
   end
 
   def pagination_links(%{total_pages: _} = opts) do
     opts = Map.put_new(opts, :page_number, 1)
 
-    content_tag(:div, class: "btn-group btn-group-toggle") do
-      opts
-      |> Scrivener.HTML.raw_pagination_links(distance: Map.get(opts, :distance, 8))
-      |> Enum.map(fn {text, page} ->
-        text = if text == :ellipsis, do: page, else: text
+    distance = 8
+    start_range = round(max(1, opts.page_number - distance / 2))
+    end_range = min(round(start_range + distance), opts.total_pages)
 
-        content_tag(:button, text,
-          phx_click: "paginate",
-          phx_value_page: page,
-          class: "btn btn-secondary btn-sm #{if page == opts.page_number, do: "active"}"
-        )
-      end)
-    end
+    assigns =
+      Map.merge(opts, %{start_range: start_range, end_range: end_range, distance: distance})
+
+    ~H"""
+    <div :if={@total_pages > 0} class="btn-group btn-group-toggle btn-group-gap">
+      <div :if={@start_range > 1}>
+        <button class="btn btn-secondary btn-sm" phx-click="paginate" phx-value-page="1">1</button>
+      </div>
+      <div :if={@start_range > 2}>
+        <button class="btn btn-secondary btn-sm" phx-click="paginate" phx-value-page="…">…</button>
+      </div>
+      <div :for={page <- @start_range..@end_range}>
+        <button phx-click="paginate" phx-value-page={page} class={"btn btn-secondary btn-sm #{if page == @page_number do "active" end}"}>
+          {page}
+        </button>
+      </div>
+      <%= if @total_pages > @distance do %>
+        <div>
+          <button class="btn btn-secondary btn-sm" phx-click="paginate" phx-value-page="…">…</button>
+        </div>
+        <div>
+          <button class="btn btn-secondary btn-sm" phx-click="paginate" phx-value-page={@total_pages}>{@total_pages}</button>
+        </div>
+      <% end %>
+      <div :if={@page_number > 1}>
+        <button class="btn btn-secondary btn-sm " phx-click="paginate" phx-value-page={@page_number - 1}>&lt;&lt;</button>
+      </div>
+      <div :if={@page_number < @total_pages}>
+        <button class="btn btn-secondary btn-sm " phx-click="paginate" phx-value-page={@page_number + 1}>&gt;&gt;</button>
+      </div>
+    </div>
+    """
   end
 
   def pagination_links(%{total_records: record_count, page_size: size} = opts) do
@@ -123,62 +169,47 @@ defmodule NervesHubWeb.LayoutView do
     |> pagination_links()
   end
 
+  def reworked_pager(opts) do
+    opts = Map.put_new(opts, :page_number, 1)
+
+    distance = 8
+    start_range = round(max(1, opts.page_number - distance / 2))
+    end_range = min(round(start_range + distance), opts.total_pages)
+
+    assigns =
+      Map.merge(opts, %{start_range: start_range, end_range: end_range, distance: distance})
+
+    ~H"""
+    <div :if={@total_pages > 1} class="flex gap-4">
+      <button class="pager-button" disabled={@page_number < 2} phx-click="paginate" phx-value-page={@page_number - 1}>
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20" fill="none">
+          <path d="M11.6667 5.83337L7.5 10L11.6667 14.1667" stroke="#A1A1AA" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+      </button>
+      <button :for={page <- @start_range..@end_range} phx-click="paginate" phx-value-page={page} class={"pager-button #{if page == @page_number do "active-page" end}"}>
+        {page}
+      </button>
+      <button :if={@total_pages > @distance} class="pager-button" phx-click="paginate" phx-value-page="…">…</button>
+      <button :if={@end_range != @total_pages} class="pager-button" phx-click="paginate" phx-value-page={@total_pages}>{@total_pages}</button>
+      <button class={["pager-button", @page_number == @total_pages && "invisible"]} phx-click="paginate" phx-value-page={@page_number + 1}>
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20" fill="none">
+          <path d="M8.3335 5.83337L12.5002 10L8.3335 14.1667" stroke="#A1A1AA" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+      </button>
+    </div>
+    """
+  end
+
   def sidebar_links(%{path_info: ["account" | _tail]} = conn),
     do: sidebar_account(conn)
 
   def sidebar_links(%{path_info: ["org", "new"]}),
     do: []
 
-  def sidebar_links(%{path_info: ["org", _org_name]} = conn),
-    do: sidebar_settings(conn)
-
-  def sidebar_links(%{path_info: ["org", _org_name, "new"]} = conn),
-    do: sidebar_settings(conn)
-
-  def sidebar_links(%{path_info: ["org", _org_name, "settings" | _tail]} = conn),
-    do: sidebar_settings(conn)
-
   def sidebar_links(%{path_info: ["org", _org_name | _tail]} = conn),
     do: sidebar_org(conn)
 
   def sidebar_links(_conn), do: []
-
-  def sidebar_settings(%{assigns: %{user: user, org: org}} = conn) do
-    ([
-       %{
-         title: "Products",
-         active: "",
-         href: Routes.product_path(conn, :index, conn.assigns.org.name)
-       }
-     ] ++
-       if NervesHub.Accounts.has_org_role?(org, user, :view) do
-         [
-           %{
-             title: "Firmware Keys",
-             active: "",
-             href: Routes.org_key_path(conn, :index, conn.assigns.org.name)
-           },
-           %{
-             title: "Users",
-             active: "",
-             href: Routes.org_user_path(conn, :index, conn.assigns.org.name)
-           },
-           %{
-             title: "Certificates",
-             active: "",
-             href: Routes.org_certificate_path(conn, :index, conn.assigns.org.name)
-           },
-           %{
-             title: "Settings",
-             active: "",
-             href: Routes.org_path(conn, :edit, conn.assigns.org.name)
-           }
-         ]
-       else
-         []
-       end)
-    |> sidebar_active(conn)
-  end
 
   def sidebar_org(conn) do
     [
@@ -186,39 +217,32 @@ defmodule NervesHubWeb.LayoutView do
       %{
         title: "Devices",
         active: "",
-        href: Routes.device_path(conn, :index, conn.assigns.org.name, conn.assigns.product.name)
+        href: ~p"/org/#{conn.assigns.org.name}/#{conn.assigns.product.name}/devices"
       },
       %{
         title: "Firmware",
         active: "",
-        href: Routes.firmware_path(conn, :index, conn.assigns.org.name, conn.assigns.product.name)
+        href: ~p"/org/#{conn.assigns.org.name}/#{conn.assigns.product.name}/firmware"
       },
       %{
         title: "Archives",
         active: "",
-        href: Routes.archive_path(conn, :index, conn.assigns.org.name, conn.assigns.product.name)
+        href: ~p"/org/#{conn.assigns.org.name}/#{conn.assigns.product.name}/archives"
       },
       %{
         title: "Deployments",
         active: "",
-        href:
-          Routes.deployment_path(conn, :index, conn.assigns.org.name, conn.assigns.product.name)
+        href: ~p"/org/#{conn.assigns.org.name}/#{conn.assigns.product.name}/deployments"
       },
       %{
         title: "Scripts",
         active: "",
-        href: Routes.script_path(conn, :index, conn.assigns.org.name, conn.assigns.product.name)
+        href: ~p"/org/#{conn.assigns.org.name}/#{conn.assigns.product.name}/scripts"
       },
       %{
         title: "Settings",
         active: "",
-        href:
-          Routes.live_path(
-            NervesHubWeb.Endpoint,
-            NervesHubWeb.Live.Product.Settings,
-            conn.assigns.org.name,
-            conn.assigns.product.name
-          )
+        href: ~p"/org/#{conn.assigns.org.name}/#{conn.assigns.product.name}/settings"
       }
     ]
     |> sidebar_active(conn)
@@ -229,17 +253,12 @@ defmodule NervesHubWeb.LayoutView do
       %{
         title: "Personal Info",
         active: "",
-        href: Routes.account_path(conn, :edit, conn.assigns.user.username)
-      },
-      %{
-        title: "My Organizations",
-        active: "",
-        href: Routes.org_path(conn, :index, conn.assigns.user.username)
+        href: ~p"/account"
       },
       %{
         title: "Access Tokens",
         active: "",
-        href: Routes.token_path(conn, :index, conn.assigns.user.username)
+        href: ~p"/account/tokens"
       }
     ]
     |> sidebar_active(conn)

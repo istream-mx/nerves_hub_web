@@ -4,8 +4,10 @@ defmodule NervesHub.Accounts.Org do
   import Ecto.Changeset
   import Ecto.Query
 
-  alias NervesHub.Accounts.{OrgKey, OrgUser}
-  alias NervesHub.Devices.{Device, CACertificate}
+  alias NervesHub.Accounts.OrgKey
+  alias NervesHub.Accounts.OrgUser
+  alias NervesHub.Devices.CACertificate
+  alias NervesHub.Devices.Device
   alias NervesHub.Products.Product
   alias NervesHub.Repo
   alias __MODULE__
@@ -17,7 +19,7 @@ defmodule NervesHub.Accounts.Org do
 
   schema "orgs" do
     has_many(:org_keys, OrgKey)
-    has_many(:products, Product)
+    has_many(:products, Product, where: [deleted_at: nil])
     has_many(:devices, Device, where: [deleted_at: nil])
     has_many(:ca_certificates, CACertificate)
 
@@ -26,11 +28,12 @@ defmodule NervesHub.Accounts.Org do
 
     field(:name, :string)
     field(:deleted_at, :utc_datetime)
+    field(:audit_log_days_to_keep, :integer)
 
     timestamps()
   end
 
-  defp changeset(%Org{} = org, params) do
+  def changeset(%Org{} = org, params) do
     org
     |> cast(params, @params)
     |> validate_required(@params)
@@ -61,6 +64,12 @@ defmodule NervesHub.Accounts.Org do
   def update_changeset(%Org{} = org, params) do
     org
     |> changeset(params)
+  end
+
+  def delete_changeset(%Org{} = org) do
+    deleted_at = DateTime.truncate(DateTime.utc_now(), :second)
+
+    change(org, deleted_at: deleted_at)
   end
 
   def with_org_keys(%Org{} = o) do

@@ -1,24 +1,26 @@
 defmodule NervesHub.DeploymentsTest do
   use NervesHub.DataCase, async: false
+
   import Phoenix.ChannelTest
 
   alias NervesHub.Deployments
   alias NervesHub.Devices.Device
   alias NervesHub.Fixtures
+
   alias Ecto.Changeset
 
   setup do
     user = Fixtures.user_fixture()
     org = Fixtures.org_fixture(user)
     product = Fixtures.product_fixture(user, org)
-    org_key = Fixtures.org_key_fixture(org)
+    org_key = Fixtures.org_key_fixture(org, user)
     firmware = Fixtures.firmware_fixture(org_key, product)
     deployment = Fixtures.deployment_fixture(org, firmware)
 
-    user2 = Fixtures.user_fixture(%{username: "user2", email: "user2@test.com"})
+    user2 = Fixtures.user_fixture(%{email: "user2@test.com"})
     org2 = Fixtures.org_fixture(user2, %{name: "org2"})
     product2 = Fixtures.product_fixture(user2, org2)
-    org_key2 = Fixtures.org_key_fixture(org2)
+    org_key2 = Fixtures.org_key_fixture(org2, user2)
     firmware2 = Fixtures.firmware_fixture(org_key2, product2)
     deployment2 = Fixtures.deployment_fixture(org2, firmware2)
 
@@ -124,107 +126,6 @@ defmodule NervesHub.DeploymentsTest do
 
       assert_broadcast("deployments/update", %{}, 500)
     end
-
-    test "changing tags resets device's deployments and causes a recalculation", state do
-      %{firmware: firmware, org: org, product: product} = state
-
-      deployment =
-        Fixtures.deployment_fixture(org, firmware, %{name: "name", conditions: %{tags: ["alpha"]}})
-
-      {:ok, deployment} = Deployments.update_deployment(deployment, %{is_active: true})
-
-      device_one = Fixtures.device_fixture(org, product, firmware, %{tags: ["alpha"]})
-      device_two = Fixtures.device_fixture(org, product, firmware, %{tags: ["alpha"]})
-
-      device_one = Deployments.set_deployment(device_one)
-      assert device_one.deployment_id == deployment.id
-      device_two = Deployments.set_deployment(device_two)
-      assert device_two.deployment_id == deployment.id
-
-      Phoenix.PubSub.subscribe(NervesHub.PubSub, "deployment:#{deployment.id}")
-
-      {:ok, deployment} =
-        Deployments.update_deployment(deployment, %{conditions: %{"tags" => ["beta"]}})
-
-      assert deployment.conditions == %{"tags" => ["beta"]}
-
-      device_one = Repo.reload(device_one)
-      refute device_one.deployment_id
-      device_two = Repo.reload(device_two)
-      refute device_two.deployment_id
-
-      assert_broadcast("deployments/changed", %{}, 500)
-    end
-
-    test "changing tags with empty version causes recalculation", state do
-      %{firmware: firmware, org: org, product: product} = state
-
-      deployment =
-        Fixtures.deployment_fixture(org, firmware, %{name: "name", conditions: %{tags: ["alpha"]}})
-
-      {:ok, deployment} = Deployments.update_deployment(deployment, %{is_active: true})
-
-      device_one = Fixtures.device_fixture(org, product, firmware, %{tags: ["alpha"]})
-      device_two = Fixtures.device_fixture(org, product, firmware, %{tags: ["beta"]})
-
-      device_one = Deployments.set_deployment(device_one)
-      assert device_one.deployment_id == deployment.id
-      device_two = Deployments.set_deployment(device_two)
-      refute device_two.deployment_id == deployment.id
-
-      Phoenix.PubSub.subscribe(NervesHub.PubSub, "deployment:#{deployment.id}")
-
-      {:ok, deployment} =
-        Deployments.update_deployment(deployment, %{
-          conditions: %{"tags" => ["beta"], "version" => ""}
-        })
-
-      assert deployment.conditions == %{"tags" => ["beta"], "version" => ""}
-
-      device_one = Repo.reload(device_one)
-      refute device_one.deployment_id
-      device_two = Repo.reload(device_two)
-      assert device_two.deployment_id
-
-      assert_broadcast("deployments/changed", %{}, 500)
-    end
-
-    test "changing is_active causes a recaluation", state do
-      %{firmware: firmware, org: org, product: product} = state
-
-      deployment =
-        Fixtures.deployment_fixture(org, firmware, %{name: "name", conditions: %{tags: ["alpha"]}})
-
-      Phoenix.PubSub.subscribe(NervesHub.PubSub, "deployment:none")
-
-      {:ok, deployment} = Deployments.update_deployment(deployment, %{is_active: true})
-
-      Phoenix.PubSub.unsubscribe(NervesHub.PubSub, "deployment:none")
-
-      assert_broadcast("deployments/changed", %{}, 500)
-
-      device_one = Fixtures.device_fixture(org, product, firmware, %{tags: ["alpha"]})
-      device_two = Fixtures.device_fixture(org, product, firmware, %{tags: ["alpha"]})
-
-      device_one = Deployments.set_deployment(device_one)
-      assert device_one.deployment_id == deployment.id
-      device_two = Deployments.set_deployment(device_two)
-      assert device_two.deployment_id == deployment.id
-
-      Phoenix.PubSub.subscribe(NervesHub.PubSub, "deployment:#{deployment.id}")
-
-      {:ok, deployment} =
-        Deployments.update_deployment(deployment, %{conditions: %{"tags" => ["beta"]}})
-
-      assert deployment.conditions == %{"tags" => ["beta"]}
-
-      assert_broadcast("deployments/changed", %{}, 500)
-
-      device_one = Repo.reload(device_one)
-      refute device_one.deployment_id
-      device_two = Repo.reload(device_two)
-      refute device_two.deployment_id
-    end
   end
 
   describe "device's matching deployments" do
@@ -253,7 +154,7 @@ defmodule NervesHub.DeploymentsTest do
       assert [
                %{id: ^beta_deployment_id},
                %{id: ^rpi_deployment_id}
-             ] = Deployments.alternate_deployments(device)
+             ] = Deployments.matching_deployments(device)
     end
 
     test "finds matching deployments including the platform", state do
@@ -275,7 +176,7 @@ defmodule NervesHub.DeploymentsTest do
 
       device = Fixtures.device_fixture(org, product, rpi_firmware, %{tags: ["beta", "rpi"]})
 
-      assert [%{id: ^rpi_deployment_id}] = Deployments.alternate_deployments(device)
+      assert [%{id: ^rpi_deployment_id}] = Deployments.matching_deployments(device)
     end
 
     test "finds matching deployments including the architecture", state do
@@ -297,7 +198,7 @@ defmodule NervesHub.DeploymentsTest do
 
       device = Fixtures.device_fixture(org, product, rpi_firmware, %{tags: ["beta", "rpi"]})
 
-      assert [%{id: ^rpi_deployment_id}] = Deployments.alternate_deployments(device)
+      assert [%{id: ^rpi_deployment_id}] = Deployments.matching_deployments(device)
     end
 
     test "finds matching deployments including the version", state do
@@ -316,7 +217,7 @@ defmodule NervesHub.DeploymentsTest do
 
       device = Fixtures.device_fixture(org, product, firmware, %{tags: ["beta", "rpi"]})
 
-      assert [%{id: ^low_deployment_id}] = Deployments.alternate_deployments(device)
+      assert [%{id: ^low_deployment_id}] = Deployments.matching_deployments(device)
     end
 
     test "finds matching deployments including pre versions", state do
@@ -337,7 +238,7 @@ defmodule NervesHub.DeploymentsTest do
 
       device = Fixtures.device_fixture(org, product, firmware, %{tags: ["beta", "rpi"]})
 
-      assert [%{id: ^low_deployment_id}] = Deployments.alternate_deployments(device)
+      assert [%{id: ^low_deployment_id}] = Deployments.matching_deployments(device)
     end
 
     test "finds the newest firmware version including pre-releases", state do
@@ -384,13 +285,13 @@ defmodule NervesHub.DeploymentsTest do
                %{id: ^v100_deployment_id},
                %{id: ^v100rc2_deployment_id},
                %{id: ^v100rc1_deployment_id}
-             ] = Deployments.alternate_deployments(device)
+             ] = Deployments.matching_deployments(device)
     end
-  end
 
-  test "alternate_deployments/2 ignores device without firmware metadata" do
-    assert [] == Deployments.alternate_deployments(%Device{firmware_metadata: nil})
-    assert [] == Deployments.alternate_deployments(%Device{firmware_metadata: nil}, [true])
-    assert [] == Deployments.alternate_deployments(%Device{firmware_metadata: nil}, [false])
+    test "ignores device without firmware metadata" do
+      assert [] == Deployments.matching_deployments(%Device{firmware_metadata: nil})
+      assert [] == Deployments.matching_deployments(%Device{firmware_metadata: nil}, [true])
+      assert [] == Deployments.matching_deployments(%Device{firmware_metadata: nil}, [false])
+    end
   end
 end

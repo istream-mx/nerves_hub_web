@@ -46,10 +46,16 @@ defmodule NervesHub.AuditLogs do
     |> Repo.all()
   end
 
+  def logs_for_feed(resource, %{page: page} = opts) when is_binary(page) do
+    logs_for_feed(resource, Map.put(opts, :page, String.to_integer(page)))
+  end
+
   def logs_for_feed(resource, opts) do
+    flop = %Flop{page: opts.page, page_size: opts.page_size}
+
     resource
     |> query_for_feed()
-    |> Repo.paginate(opts)
+    |> Flop.run(flop)
   end
 
   defp query_for_feed(%Deployment{id: id}) do
@@ -78,19 +84,16 @@ defmodule NervesHub.AuditLogs do
     |> IO.iodata_to_binary()
   end
 
-  def truncate(opts) do
-    oldest = DateTime.add(DateTime.utc_now(), -24 * 60 * 60 * opts[:days_kept], :second)
+  @spec truncate(non_neg_integer(), non_neg_integer()) :: {:ok, non_neg_integer()}
+  def truncate(org_id, days_to_keep) do
+    days_ago = DateTime.shift(DateTime.utc_now(), day: -days_to_keep)
 
-    to_delete =
-      from(a in AuditLog,
-        where: a.inserted_at < ^oldest,
-        order_by: [asc: :inserted_at],
-        limit: ^opts[:max_records_per_run],
-        select: a.id
-      )
+    {count, _} =
+      AuditLog
+      |> where([a], a.org_id == ^org_id)
+      |> where([a], a.inserted_at < ^days_ago)
+      |> Repo.delete_all()
 
-    AuditLog
-    |> where([a], a.id in subquery(to_delete))
-    |> Repo.delete_all()
+    {:ok, count}
   end
 end

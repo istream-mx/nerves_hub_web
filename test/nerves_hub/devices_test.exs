@@ -1,6 +1,8 @@
 defmodule NervesHub.DevicesTest do
   use NervesHub.DataCase, async: false
 
+  alias Ecto.Changeset
+
   alias NervesHub.AuditLogs
   alias NervesHub.Deployments
   alias NervesHub.Devices
@@ -9,8 +11,8 @@ defmodule NervesHub.DevicesTest do
   alias NervesHub.Firmwares
   alias NervesHub.Fixtures
   alias NervesHub.Products
+
   alias NervesHub.Repo
-  alias Ecto.Changeset
 
   @valid_fwup_version "1.10.0"
 
@@ -18,9 +20,9 @@ defmodule NervesHub.DevicesTest do
     user = Fixtures.user_fixture()
     org = Fixtures.org_fixture(user)
     product = Fixtures.product_fixture(user, org)
-    org_key = Fixtures.org_key_fixture(org)
+    org_key = Fixtures.org_key_fixture(org, user)
     firmware = Fixtures.firmware_fixture(org_key, product)
-    deployment = Fixtures.deployment_fixture(org, firmware)
+    deployment = Fixtures.deployment_fixture(org, firmware, %{is_active: true})
     device = Fixtures.device_fixture(org, product, firmware)
     device2 = Fixtures.device_fixture(org, product, firmware)
     device3 = Fixtures.device_fixture(org, product, firmware)
@@ -106,7 +108,7 @@ defmodule NervesHub.DevicesTest do
     user = Fixtures.user_fixture()
     org = Fixtures.org_fixture(user, %{name: "Test-Org-2"})
     product = Fixtures.product_fixture(user, org)
-    org_key = Fixtures.org_key_fixture(org)
+    org_key = Fixtures.org_key_fixture(org, user)
     firmware = Fixtures.firmware_fixture(org_key, product)
     device = Fixtures.device_fixture(org, product, firmware, %{updates_enabled: false})
 
@@ -121,7 +123,7 @@ defmodule NervesHub.DevicesTest do
     user = Fixtures.user_fixture()
     org = Fixtures.org_fixture(user, %{name: "Test-Org-2"})
     product = Fixtures.product_fixture(user, org)
-    org_key = Fixtures.org_key_fixture(org)
+    org_key = Fixtures.org_key_fixture(org, user)
     firmware = Fixtures.firmware_fixture(org_key, product)
     device = Fixtures.device_fixture(org, product, firmware, %{updates_enabled: false})
     device2 = Fixtures.device_fixture(org, product, firmware, %{updates_enabled: false})
@@ -138,7 +140,7 @@ defmodule NervesHub.DevicesTest do
     user = Fixtures.user_fixture()
     org = Fixtures.org_fixture(user, %{name: "Test-Org-2"})
     product = Fixtures.product_fixture(user, org)
-    org_key = Fixtures.org_key_fixture(org)
+    org_key = Fixtures.org_key_fixture(org, user)
     firmware = Fixtures.firmware_fixture(org_key, product)
 
     device =
@@ -565,7 +567,7 @@ defmodule NervesHub.DevicesTest do
       assert Enum.count(device.update_attempts) == 1
 
       {:ok, device} = Devices.firmware_update_successful(device)
-      assert Enum.count(device.update_attempts) == 0
+      assert Enum.empty?(device.update_attempts)
     end
 
     test "clears an inflight update if it matches", %{device: device, deployment: deployment} do
@@ -646,13 +648,14 @@ defmodule NervesHub.DevicesTest do
       {:error, :up_to_date, _device} = Devices.verify_update_eligibility(device, deployment)
     end
 
-    test "device is unhealthy and should be put in the penalty box based on total attemps",
+    test "device should be rejected for updates based on threshold rate and have it's inflight updates cleared",
          state do
       %{device: device, deployment: deployment} = state
       deployment = Repo.preload(deployment, [:firmware])
       deployment = %{deployment | device_failure_threshold: 6}
 
       {:ok, device} = update_firmware_uuid(device, Ecto.UUID.generate())
+      {:ok, _inflight_update} = Devices.told_to_update(device, deployment)
 
       now = DateTime.utc_now()
 
@@ -666,14 +669,16 @@ defmodule NervesHub.DevicesTest do
       {:error, :updates_blocked, device} = Devices.verify_update_eligibility(device, deployment)
 
       assert device.updates_blocked_until
+      assert Devices.count_inflight_updates_for(deployment) == 0
     end
 
-    test "device is unhealthy and should be put in the penalty box based on attempt rate",
+    test "device should be rejected for updates based on attempt rate and have it's inflight updates cleared",
          state do
       %{device: device, deployment: deployment} = state
       deployment = Repo.preload(deployment, [:firmware])
 
       {:ok, device} = update_firmware_uuid(device, Ecto.UUID.generate())
+      {:ok, _inflight_update} = Devices.told_to_update(device, deployment)
 
       now = DateTime.utc_now()
 
@@ -686,9 +691,11 @@ defmodule NervesHub.DevicesTest do
       {:error, :updates_blocked, device} = Devices.verify_update_eligibility(device, deployment)
 
       assert device.updates_blocked_until
+      assert Devices.count_inflight_updates_for(deployment) == 0
     end
 
-    test "device is in the penalty box and should be rejected for updates", state do
+    test "device in penalty box should be rejected for updates and have it's inflight updates cleared",
+         state do
       %{device: device, deployment: deployment} = state
       deployment = Repo.preload(deployment, [:firmware])
 
@@ -698,9 +705,12 @@ defmodule NervesHub.DevicesTest do
 
       # future time
       device = %{device | updates_blocked_until: DateTime.add(now, 1, :second)}
+      {:ok, _inflight_update} = Devices.told_to_update(device, deployment)
 
       {:error, :updates_blocked, _device} =
         Devices.verify_update_eligibility(device, deployment, now)
+
+      assert Devices.count_inflight_updates_for(deployment) == 0
 
       # now
       device = %{device | updates_blocked_until: now}
@@ -712,172 +722,79 @@ defmodule NervesHub.DevicesTest do
     end
   end
 
-  describe "update device" do
-    test "success: deployment is not changed if tags don't change" do
-      user = Fixtures.user_fixture()
-      org = Fixtures.org_fixture(user, %{name: "org"})
-      product = Fixtures.product_fixture(user, org)
-      org_key = Fixtures.org_key_fixture(org)
-      firmware = Fixtures.firmware_fixture(org_key, product)
+  describe "inflight updates" do
+    test "clears expired inflight updates", %{device: device, deployment: deployment} do
+      deployment = Repo.preload(deployment, :firmware)
+      Fixtures.inflight_update(device, deployment)
+      assert {0, _} = Devices.delete_expired_inflight_updates()
 
-      deployment =
-        Fixtures.deployment_fixture(org, firmware, %{conditions: %{"tags" => ["beta"]}})
+      Devices.clear_inflight_update(device)
 
-      {:ok, deployment} = Deployments.update_deployment(deployment, %{is_active: true})
-      device = Fixtures.device_fixture(org, product, firmware, %{tags: ["beta"]})
+      expires_at =
+        DateTime.utc_now()
+        |> DateTime.shift(hour: -1)
+        |> DateTime.truncate(:second)
 
-      device = Deployments.set_deployment(device)
-      assert device.deployment_id == deployment.id
-
-      {:ok, device} = Devices.update_device(device, %{description: "Updated description"})
-      assert device.deployment_id == deployment.id
-    end
-
-    test "success: deployment changes if the tags change" do
-      user = Fixtures.user_fixture()
-      org = Fixtures.org_fixture(user, %{name: "org"})
-      product = Fixtures.product_fixture(user, org)
-      org_key = Fixtures.org_key_fixture(org)
-      firmware = Fixtures.firmware_fixture(org_key, product)
-
-      deployment_one =
-        Fixtures.deployment_fixture(org, firmware, %{
-          name: "alpha",
-          conditions: %{"tags" => ["alpha"]}
-        })
-
-      {:ok, deployment_one} = Deployments.update_deployment(deployment_one, %{is_active: true})
-
-      deployment_two =
-        Fixtures.deployment_fixture(org, firmware, %{
-          name: "beta",
-          conditions: %{"tags" => ["beta"]}
-        })
-
-      {:ok, deployment_two} = Deployments.update_deployment(deployment_two, %{is_active: true})
-      device = Fixtures.device_fixture(org, product, firmware, %{tags: ["alpha"]})
-
-      device = Deployments.set_deployment(device)
-      assert device.deployment_id == deployment_one.id
-
-      {:ok, device} = Devices.update_device(device, %{tags: ["beta"]})
-      assert device.deployment_id == deployment_two.id
+      Fixtures.inflight_update(device, deployment, %{"expires_at" => expires_at})
+      assert {1, _} = Devices.delete_expired_inflight_updates()
     end
   end
 
-  describe "firmware status" do
-    test "latest: no deployment" do
-      user = Fixtures.user_fixture()
-      org = Fixtures.org_fixture(user, %{name: "org"})
-      product = Fixtures.product_fixture(user, org)
-      org_key = Fixtures.org_key_fixture(org)
-      firmware = Fixtures.firmware_fixture(org_key, product)
+  describe "clean up device connection statuses" do
+    test "don't change the connection status of devices with a recent heartbeat", %{
+      org: org,
+      product: product,
+      firmware: firmware
+    } do
+      Fixtures.device_fixture(org, product, firmware, %{
+        connection_status: :connected,
+        connection_established_at: DateTime.shift(DateTime.utc_now(), minute: -10),
+        connection_last_seen_at: DateTime.shift(DateTime.utc_now(), minute: -1)
+      })
 
-      device = Fixtures.device_fixture(org, product, firmware, %{tags: ["alpha"]})
+      Fixtures.device_fixture(org, product, firmware, %{
+        connection_status: :connected,
+        connection_established_at: DateTime.shift(DateTime.utc_now(), minute: -9),
+        connection_last_seen_at: DateTime.shift(DateTime.utc_now(), minute: -2)
+      })
 
-      refute device.deployment_id
-      assert Devices.firmware_status(device) == "latest"
+      Fixtures.device_fixture(org, product, firmware, %{
+        connection_status: :connected,
+        connection_established_at: DateTime.shift(DateTime.utc_now(), minute: -11),
+        connection_last_seen_at: DateTime.shift(DateTime.utc_now(), minute: -1)
+      })
+
+      assert Devices.connected_count(product) == 3
+      Devices.clean_connection_states()
+      assert Devices.connected_count(product) == 3
     end
 
-    test "latest: firmware matches the deployment" do
-      user = Fixtures.user_fixture()
-      org = Fixtures.org_fixture(user, %{name: "org"})
-      product = Fixtures.product_fixture(user, org)
-      org_key = Fixtures.org_key_fixture(org)
-      firmware = Fixtures.firmware_fixture(org_key, product)
+    test "clean connection status of devices not seen recently", %{
+      org: org,
+      product: product,
+      firmware: firmware
+    } do
+      Fixtures.device_fixture(org, product, firmware, %{
+        connection_status: :connected,
+        connection_established_at: DateTime.shift(DateTime.utc_now(), minute: -10),
+        connection_last_seen_at: DateTime.shift(DateTime.utc_now(), minute: -1)
+      })
 
-      deployment =
-        Fixtures.deployment_fixture(org, firmware, %{
-          name: "alpha",
-          conditions: %{"tags" => ["alpha"]}
-        })
+      Fixtures.device_fixture(org, product, firmware, %{
+        connection_status: :connected,
+        connection_established_at: DateTime.shift(DateTime.utc_now(), minute: -25),
+        connection_last_seen_at: DateTime.shift(DateTime.utc_now(), minute: -15)
+      })
 
-      {:ok, deployment} = Deployments.update_deployment(deployment, %{is_active: true})
+      Fixtures.device_fixture(org, product, firmware, %{
+        connection_status: :connected,
+        connection_established_at: DateTime.shift(DateTime.utc_now(), minute: -47),
+        connection_last_seen_at: DateTime.shift(DateTime.utc_now(), minute: -9)
+      })
 
-      device = Fixtures.device_fixture(org, product, firmware, %{tags: ["alpha"]})
-      device = Deployments.set_deployment(device)
-
-      assert device.deployment_id == deployment.id
-      assert device.updates_enabled
-
-      assert Devices.firmware_status(device) == "latest"
-    end
-
-    test "updating: there are update attempts" do
-      user = Fixtures.user_fixture()
-      org = Fixtures.org_fixture(user, %{name: "org"})
-      product = Fixtures.product_fixture(user, org)
-      org_key = Fixtures.org_key_fixture(org)
-      firmware_one = Fixtures.firmware_fixture(org_key, product)
-      firmware_two = Fixtures.firmware_fixture(org_key, product)
-
-      deployment =
-        Fixtures.deployment_fixture(org, firmware_one, %{
-          name: "alpha",
-          conditions: %{"tags" => ["alpha"]}
-        })
-
-      {:ok, deployment} = Deployments.update_deployment(deployment, %{is_active: true})
-
-      device = Fixtures.device_fixture(org, product, firmware_two, %{tags: ["alpha"]})
-      device = Deployments.set_deployment(device)
-      {:ok, device} = Devices.update_attempted(device)
-
-      assert device.deployment_id == deployment.id
-      assert device.updates_enabled
-
-      assert Devices.firmware_status(device) == "updating"
-    end
-
-    test "pending: updates are disabled" do
-      user = Fixtures.user_fixture()
-      org = Fixtures.org_fixture(user, %{name: "org"})
-      product = Fixtures.product_fixture(user, org)
-      org_key = Fixtures.org_key_fixture(org)
-      firmware_one = Fixtures.firmware_fixture(org_key, product)
-      firmware_two = Fixtures.firmware_fixture(org_key, product)
-
-      deployment =
-        Fixtures.deployment_fixture(org, firmware_one, %{
-          name: "alpha",
-          conditions: %{"tags" => ["alpha"]}
-        })
-
-      {:ok, deployment} = Deployments.update_deployment(deployment, %{is_active: true})
-
-      device = Fixtures.device_fixture(org, product, firmware_two, %{tags: ["alpha"]})
-      device = Deployments.set_deployment(device)
-      {:ok, device} = Devices.disable_updates(device, user)
-
-      assert device.deployment_id == deployment.id
-      refute device.updates_enabled
-
-      assert Devices.firmware_status(device) == "pending"
-    end
-
-    test "pending: still waiting on updating" do
-      user = Fixtures.user_fixture()
-      org = Fixtures.org_fixture(user, %{name: "org"})
-      product = Fixtures.product_fixture(user, org)
-      org_key = Fixtures.org_key_fixture(org)
-      firmware_one = Fixtures.firmware_fixture(org_key, product)
-      firmware_two = Fixtures.firmware_fixture(org_key, product)
-
-      deployment =
-        Fixtures.deployment_fixture(org, firmware_one, %{
-          name: "alpha",
-          conditions: %{"tags" => ["alpha"]}
-        })
-
-      {:ok, deployment} = Deployments.update_deployment(deployment, %{is_active: true})
-
-      device = Fixtures.device_fixture(org, product, firmware_two, %{tags: ["alpha"]})
-      device = Deployments.set_deployment(device)
-
-      assert device.deployment_id == deployment.id
-      assert device.updates_enabled
-
-      assert Devices.firmware_status(device) == "pending"
+      assert Devices.connected_count(product) == 3
+      Devices.clean_connection_states()
+      assert Devices.connected_count(product) == 1
     end
   end
 
@@ -891,5 +808,39 @@ defmodule NervesHub.DevicesTest do
     }
 
     Devices.update_firmware_metadata(device, firmware_metadata)
+  end
+
+  describe "device health reports" do
+    test "create new device health", %{device: device} do
+      device_health = %{"device_id" => device.id, "data" => %{"literally_any_map" => "values"}}
+      assert {:ok, %Devices.DeviceHealth{}} = Devices.save_device_health(device_health)
+      assert %Devices.DeviceHealth{} = Devices.get_latest_health(device.id)
+    end
+
+    test "create health reports over limit and then clean down to default limit", %{
+      device: device
+    } do
+      device_health = %{"device_id" => device.id, "data" => %{"literally_any_map" => "values"}}
+
+      for x <- 0..9 do
+        days_ago = DateTime.shift(DateTime.utc_now(), day: -x)
+
+        inserted =
+          device_health
+          |> Devices.DeviceHealth.save()
+          |> Ecto.Changeset.put_change(:inserted_at, days_ago)
+          |> Repo.insert()
+
+        assert {:ok, %Devices.DeviceHealth{}} = inserted
+      end
+
+      healths = Devices.get_device_health(device.id)
+      assert 10 = Enum.count(healths)
+
+      Devices.truncate_device_health()
+
+      healths = Devices.get_device_health(device.id)
+      assert 7 = Enum.count(healths)
+    end
   end
 end

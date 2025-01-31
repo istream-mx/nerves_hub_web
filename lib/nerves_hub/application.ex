@@ -4,13 +4,22 @@ defmodule NervesHub.Application do
   require Logger
 
   def start(_type, _args) do
-    case System.cmd("fwup", ["--version"]) do
+    case System.cmd("fwup", ["--version"], env: []) do
       {_, 0} ->
         Logger.debug("fwup was found")
 
       _ ->
         raise "fwup could not be found in the $PATH. This is a requirement of NervesHubWeb and cannot start otherwise"
     end
+
+    setup_open_telemetry()
+
+    _ =
+      :logger.add_handler(:my_sentry_handler, Sentry.LoggerHandler, %{
+        config: %{metadata: [:file, :line]}
+      })
+
+    NervesHub.Logger.attach()
 
     topologies = Application.get_env(:libcluster, :topologies, [])
 
@@ -19,11 +28,12 @@ defmodule NervesHub.Application do
         {Ecto.Migrator,
          repos: Application.fetch_env!(:nerves_hub, :ecto_repos),
          skip: Application.get_env(:nerves_hub, :database_auto_migrator) != true},
-        {Registry, keys: :unique, name: NervesHub.Devices},
+        {Registry, keys: :unique, name: NervesHub.Devices.Registry},
         {Finch, name: Swoosh.Finch}
       ] ++
-        metrics(deploy_env()) ++
+        NervesHub.StatsdMetricsReporter.config() ++
         [
+          NervesHub.MetricsPoller.child_spec(),
           NervesHub.RateLimit,
           NervesHub.Repo,
           NervesHub.ObanRepo,
@@ -39,15 +49,28 @@ defmodule NervesHub.Application do
     Supervisor.start_link(children, opts)
   end
 
-  def config_change(changed, _new, removed) do
-    NervesHubWeb.Endpoint.config_change(changed, removed)
+  defp setup_open_telemetry() do
+    if System.get_env("ECTO_IPV6") do
+      :ok = :httpc.set_option(:ipfamily, :inet6fb4)
+    end
+
+    :ok = NervesHub.Telemetry.Customizations.setup()
+
+    :ok = OpentelemetryBandit.setup()
+    :ok = OpentelemetryPhoenix.setup(adapter: :bandit)
+    :ok = OpentelemetryOban.setup(trace: [:jobs])
+
+    :ok =
+      NervesHub.Repo.config()
+      |> Keyword.fetch!(:telemetry_prefix)
+      |> OpentelemetryEcto.setup(db_statement: :enabled)
+
     :ok
   end
 
-  defp metrics("test"), do: []
-
-  defp metrics(_env) do
-    [NervesHub.Metrics]
+  def config_change(changed, _new, removed) do
+    NervesHubWeb.Endpoint.config_change(changed, removed)
+    :ok
   end
 
   defp deployments_supervisor("test"), do: []

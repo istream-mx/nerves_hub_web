@@ -2,19 +2,24 @@ defmodule NervesHub.Deployments.Orchestrator do
   @moduledoc """
   Orchestration process to handle passing out updates to devices
 
-  When a deployment is updated, the orchestraor will tell every
-  device local to its node that there is a new update. This will
+  When a deployment is updated, the orchestrator will tell every
+  device local to its node that there is a new update. This
   hook will allow the orchestrator to start slowly handing out
   updates instead of blasting every device at once.
   """
 
   use GenServer
+  use OpenTelemetryDecorator
 
   require Logger
 
+  alias NervesHub.Deployments
+  alias NervesHub.Deployments.Deployment
   alias NervesHub.Devices
   alias NervesHub.Devices.Device
+
   alias NervesHub.Repo
+
   alias Phoenix.PubSub
   alias Phoenix.Socket.Broadcast
 
@@ -23,7 +28,7 @@ defmodule NervesHub.Deployments.Orchestrator do
   end
 
   def name(deployment_id) when is_integer(deployment_id) do
-    {:via, Registry, {NervesHub.Deployments, deployment_id}}
+    {:via, Registry, {Deployments, deployment_id}}
   end
 
   def name(deployment), do: name(deployment.id)
@@ -48,6 +53,12 @@ defmodule NervesHub.Deployments.Orchestrator do
   As devices update and reconnect, the new orchestrator is told that the update
   was successful, and the process is repeated.
   """
+  @decorate with_span("Deployments.Orchestrator.trigger_update#noop")
+  def trigger_update(%Deployment{is_active: false}) do
+    :ok
+  end
+
+  @decorate with_span("Deployments.Orchestrator.trigger_update")
   def trigger_update(deployment) do
     :telemetry.execute([:nerves_hub, :deployment, :trigger_update], %{count: 1})
 
@@ -65,7 +76,7 @@ defmodule NervesHub.Deployments.Orchestrator do
     }
 
     devices =
-      Registry.select(NervesHub.Devices, [
+      Registry.select(Devices.Registry, [
         {{:_, :_, :"$1"}, match_conditions, [match_return]}
       ])
 
@@ -106,11 +117,13 @@ defmodule NervesHub.Deployments.Orchestrator do
     {:ok, deployment, {:continue, :boot}}
   end
 
+  @decorate with_span("Deployments.Orchestrator.boot")
   def handle_continue(:boot, deployment) do
-    PubSub.subscribe(NervesHub.PubSub, "deployment:#{deployment.id}")
+    _ = PubSub.subscribe(NervesHub.PubSub, "deployment:#{deployment.id}")
 
-    # trigger every 5 minutes as a back up
-    :timer.send_interval(5 * 60 * 1000, :trigger)
+    # trigger every 10 minutes, plus a jitter between 1 and 5 seconds, as a back up
+    interval = (10 + :rand.uniform(10)) * 60 * 1000
+    _ = :timer.send_interval(interval, :trigger)
 
     deployment =
       deployment
@@ -125,6 +138,7 @@ defmodule NervesHub.Deployments.Orchestrator do
     {:noreply, deployment}
   end
 
+  @decorate with_span("Deployments.Orchestrator.handle_info:deployments/update")
   def handle_info(%Broadcast{event: "deployments/update"}, deployment) do
     deployment =
       deployment

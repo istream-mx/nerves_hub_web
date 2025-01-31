@@ -4,12 +4,12 @@ defmodule NervesHubWeb.DeviceChannelTest do
 
   import TrackerHelper
 
-  alias NervesHub.Devices
   alias NervesHub.Fixtures
   alias NervesHubWeb.DeviceChannel
-  alias NervesHubWeb.DeviceSocketCertAuth, as: DeviceSocket
+  alias NervesHubWeb.DeviceSocket
+  alias NervesHubWeb.ExtensionsChannel
 
-  test "basic connection to the channel" do
+  test "extensions are requested from device if version is above 2.2.0" do
     user = Fixtures.user_fixture()
     {device, _firmware, _deployment} = device_fixture(user, %{identifier: "123"})
     %{db_cert: certificate, cert: _cert} = Fixtures.device_certificate_fixture(device)
@@ -17,8 +17,16 @@ defmodule NervesHubWeb.DeviceChannelTest do
     {:ok, socket} =
       connect(DeviceSocket, %{}, connect_info: %{peer_data: %{ssl_cert: certificate.der}})
 
-    {:ok, _, socket} = subscribe_and_join(socket, DeviceChannel, "device")
-    assert socket
+    {:ok, _, socket} =
+      subscribe_and_join(socket, DeviceChannel, "device", %{"device_api_version" => "2.2.0"})
+
+    assert_push("extensions:get", _)
+
+    {:ok, _, _socket} =
+      subscribe_and_join(socket, ExtensionsChannel, "extensions", %{
+        "geo" => "1.0.0",
+        "health" => "1.0.0"
+      })
   end
 
   test "presence connection information" do
@@ -26,12 +34,14 @@ defmodule NervesHubWeb.DeviceChannelTest do
     {device, _firmware, _deployment} = device_fixture(user, %{identifier: "123"})
     %{db_cert: certificate, cert: _cert} = Fixtures.device_certificate_fixture(device)
 
+    subscribe_for_updates(device)
+
     {:ok, socket} =
       connect(DeviceSocket, %{}, connect_info: %{peer_data: %{ssl_cert: certificate.der}})
 
     {:ok, _, _socket} = subscribe_and_join(socket, DeviceChannel, "device")
 
-    assert_online(device)
+    assert_connection_change()
   end
 
   test "fwup_public_keys requested on connect" do
@@ -57,13 +67,10 @@ defmodule NervesHubWeb.DeviceChannelTest do
     assert_push("fwup_public_keys", %{keys: [_]})
   end
 
-  test "update_available on connect" do
+  test "archive_public_keys requested on connect" do
     user = Fixtures.user_fixture()
-    {device, _firmware, deployment} = device_fixture(user, %{identifier: "123"})
+    {device, _firmware, _deployment} = device_fixture(user, %{identifier: "123"})
     %{db_cert: certificate, cert: _cert} = Fixtures.device_certificate_fixture(device)
-
-    assert {:ok, device} = Devices.update_device(device, %{deployment_id: deployment.id})
-    assert device.updates_enabled
 
     params =
       for {k, v} <- Map.from_struct(device.firmware_metadata), into: %{} do
@@ -73,12 +80,14 @@ defmodule NervesHubWeb.DeviceChannelTest do
         end
       end
 
+    params = Map.put(params, "archive_public_keys", "on_connect")
+
     {:ok, socket} =
       connect(DeviceSocket, %{}, connect_info: %{peer_data: %{ssl_cert: certificate.der}})
 
     {:ok, %{}, _socket} = subscribe_and_join(socket, DeviceChannel, "device", params)
 
-    assert_push("update", %{})
+    assert_push("archive_public_keys", %{keys: [_]})
   end
 
   test "the first fwup_progress marks an update as happening" do
@@ -121,131 +130,45 @@ defmodule NervesHubWeb.DeviceChannelTest do
     assert device.connection_types == [:ethernet, :wifi]
   end
 
-  test "deployment condition changing causes a deployment relookup" do
-    user = Fixtures.user_fixture()
-    org = Fixtures.org_fixture(user)
-    product = Fixtures.product_fixture(user, org)
-    org_key = Fixtures.org_key_fixture(org)
+  describe "unhandled messages are caught" do
+    test "handle_info" do
+      user = Fixtures.user_fixture()
+      {device, _firmware, _deployment} = device_fixture(user, %{identifier: "123"})
+      %{db_cert: certificate, cert: _cert} = Fixtures.device_certificate_fixture(device)
 
-    firmware =
-      Fixtures.firmware_fixture(org_key, product, %{
-        version: "0.0.1"
-      })
+      subscribe_for_updates(device)
 
-    deployment =
-      Fixtures.deployment_fixture(org, firmware, %{
-        conditions: %{"tags" => ["alpha"], "version" => ""}
-      })
+      {:ok, socket} =
+        connect(DeviceSocket, %{}, connect_info: %{peer_data: %{ssl_cert: certificate.der}})
 
-    {:ok, deployment} =
-      NervesHub.Deployments.update_deployment(deployment, %{
-        is_active: true
-      })
+      {:ok, _join_reply, socket} =
+        subscribe_and_join(socket, DeviceChannel, "device")
 
-    device_alpha =
-      Fixtures.device_fixture(org, product, firmware, %{
-        tags: ["alpha"],
-        identifier: "123"
-      })
+      send(socket.channel_pid, {"do_you_like_dem_apples", %{"apples" => 5}})
 
-    device_beta =
-      Fixtures.device_fixture(org, product, firmware, %{
-        tags: ["beta"],
-        identifier: "123"
-      })
+      assert_connection_change()
+    end
 
-    %{db_cert: alpha_certificate, cert: _cert} =
-      Fixtures.device_certificate_fixture(device_alpha, X509.PrivateKey.new_ec(:secp256r1))
+    test "handle_in" do
+      user = Fixtures.user_fixture()
+      {device, _firmware, _deployment} = device_fixture(user, %{identifier: "123"})
+      %{db_cert: certificate, cert: _cert} = Fixtures.device_certificate_fixture(device)
 
-    {:ok, socket_alpha} =
-      connect(DeviceSocket, %{}, connect_info: %{peer_data: %{ssl_cert: alpha_certificate.der}})
+      {:ok, socket} =
+        connect(DeviceSocket, %{}, connect_info: %{peer_data: %{ssl_cert: certificate.der}})
 
-    {:ok, %{}, socket_alpha} =
-      subscribe_and_join(socket_alpha, DeviceChannel, "device")
+      {:ok, _join_reply, socket} =
+        subscribe_and_join(socket, DeviceChannel, "device")
 
-    %{db_cert: beta_certificate, cert: _cert} =
-      Fixtures.device_certificate_fixture(device_beta, X509.PrivateKey.new_ec(:secp256r1))
-
-    {:ok, socket_beta} =
-      connect(DeviceSocket, %{}, connect_info: %{peer_data: %{ssl_cert: beta_certificate.der}})
-
-    {:ok, %{}, socket_beta} =
-      subscribe_and_join(socket_beta, DeviceChannel, "device")
-
-    socket_alpha = :sys.get_state(socket_alpha.channel_pid)
-    refute is_nil(socket_alpha.assigns.device.deployment_id)
-
-    socket_beta = :sys.get_state(socket_beta.channel_pid)
-    assert is_nil(socket_beta.assigns.device.deployment_id)
-
-    # This will remove the deployment from alpha and
-    # add it to the beta device
-    {:ok, _deployment} =
-      NervesHub.Deployments.update_deployment(deployment, %{
-        conditions: %{"tags" => ["beta"]}
-      })
-
-    # skip the jitter
-    send(socket_alpha.channel_pid, :resolve_changed_deployment)
-    socket_alpha = :sys.get_state(socket_alpha.channel_pid)
-    assert is_nil(socket_alpha.assigns.device.deployment_id)
-
-    socket_beta = :sys.get_state(socket_beta.channel_pid)
-    refute is_nil(socket_beta.assigns.device.deployment_id)
-  end
-
-  test "deployment condition changing causes a deployment relookup but it still matches" do
-    user = Fixtures.user_fixture()
-    org = Fixtures.org_fixture(user)
-    product = Fixtures.product_fixture(user, org)
-    org_key = Fixtures.org_key_fixture(org)
-
-    firmware =
-      Fixtures.firmware_fixture(org_key, product, %{
-        version: "0.0.1"
-      })
-
-    deployment =
-      Fixtures.deployment_fixture(org, firmware, %{
-        conditions: %{"tags" => ["alpha"], "version" => ""}
-      })
-
-    {:ok, deployment} =
-      NervesHub.Deployments.update_deployment(deployment, %{
-        is_active: true
-      })
-
-    device_alpha =
-      Fixtures.device_fixture(org, product, firmware, %{
-        tags: ["alpha", "device"],
-        identifier: "123"
-      })
-
-    %{db_cert: alpha_certificate, cert: _cert} =
-      Fixtures.device_certificate_fixture(device_alpha, X509.PrivateKey.new_ec(:secp256r1))
-
-    {:ok, socket_alpha} =
-      connect(DeviceSocket, %{}, connect_info: %{peer_data: %{ssl_cert: alpha_certificate.der}})
-
-    {:ok, %{}, socket_alpha} =
-      subscribe_and_join(socket_alpha, DeviceChannel, "device")
-
-    socket_alpha = :sys.get_state(socket_alpha.channel_pid)
-    refute is_nil(socket_alpha.assigns.device.deployment_id)
-
-    {:ok, _deployment} =
-      NervesHub.Deployments.update_deployment(deployment, %{
-        conditions: %{"tags" => ["alpha", "device"]}
-      })
-
-    socket_alpha = :sys.get_state(socket_alpha.channel_pid)
-    refute is_nil(socket_alpha.assigns.device.deployment_id)
+      ref = push(socket, "do_you_like_dem_apples", %{"apples" => 5})
+      refute_reply(ref, %{})
+    end
   end
 
   def device_fixture(user, device_params \\ %{}, org \\ nil) do
     org = org || Fixtures.org_fixture(user)
     product = Fixtures.product_fixture(user, org)
-    org_key = Fixtures.org_key_fixture(org)
+    org_key = Fixtures.org_key_fixture(org, user)
 
     firmware =
       Fixtures.firmware_fixture(org_key, product, %{

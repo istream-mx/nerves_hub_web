@@ -17,21 +17,46 @@ defmodule NervesHubWeb do
   and import those modules here.
   """
 
-  def static_paths, do: ~w(assets fonts images favicon.ico robots.txt)
+  def static_paths(), do: ~w(assets fonts images favicon.ico robots.txt)
 
-  def plug do
+  def plug() do
     quote do
+      @behaviour Plug
       import Plug.Conn
       import Phoenix.Controller
     end
   end
 
-  def controller do
+  def controller() do
     quote do
       use Phoenix.Controller, namespace: NervesHubWeb
+      use Gettext, backend: NervesHubWeb.Gettext
 
       import Plug.Conn
-      import NervesHubWeb.Gettext
+      import Phoenix.LiveView.Controller
+      import NervesHub.RoleValidateHelpers
+
+      import Phoenix.LiveView.Controller
+
+      alias NervesHubWeb.Router.Helpers, as: Routes
+
+      # Routes generation with the ~p sigil
+      unquote(verified_routes())
+
+      def whitelist(params, keys) do
+        keys
+        |> Enum.filter(fn x -> !is_nil(params[to_string(x)]) end)
+        |> Enum.into(%{}, fn x -> {x, params[to_string(x)]} end)
+      end
+    end
+  end
+
+  def api_controller() do
+    quote do
+      use Phoenix.Controller, namespace: NervesHubWeb
+      use Gettext, backend: NervesHubWeb.Gettext
+
+      import Plug.Conn
       import Phoenix.LiveView.Controller
       import NervesHub.RoleValidateHelpers
 
@@ -47,76 +72,18 @@ defmodule NervesHubWeb do
     end
   end
 
-  def api_controller do
+  def updated_live_view() do
     quote do
-      use Phoenix.Controller, namespace: NervesHubWeb
+      use NervesHubWeb.LiveView,
+        layout: {NervesHubWeb.LayoutView, :live},
+        container: {:div, class: "h-screen"}
 
-      import Plug.Conn
-      import NervesHubWeb.Gettext
-      import Phoenix.LiveView.Controller
-      import NervesHub.RoleValidateHelpers
-
-      import Phoenix.LiveView.Controller
-
-      alias NervesHubWeb.Router.Helpers, as: Routes
-
-      def whitelist(params, keys) do
-        keys
-        |> Enum.filter(fn x -> !is_nil(params[to_string(x)]) end)
-        |> Enum.into(%{}, fn x -> {x, params[to_string(x)]} end)
-      end
-    end
-  end
-
-  def live_view do
-    quote do
-      use Phoenix.LiveView
-
-      alias NervesHub.{Repo, AuditLogs}
-
-      alias NervesHubWeb.{
-        DeviceLive,
-        Endpoint
-      }
-
-      alias NervesHubWeb.Router.Helpers, as: Routes
-
-      alias Phoenix.Socket.Broadcast
-
-      defp socket_error(socket, error, opts \\ []) do
-        redirect = opts[:redirect_to] || Routes.home_path(socket, :index)
-
-        socket =
-          socket
-          |> put_flash(:info, error)
-          |> redirect(to: redirect)
-
-        {:ok, socket}
-      end
-
-      defp live_view_error(:update) do
-        "The software running on NervesHub was updated to the latest version."
-      end
-
-      defp live_view_error(_) do
-        "An error occurred while loading the view."
-      end
-
-      unquote(view_helpers())
-    end
-  end
-
-  def updated_live_view do
-    quote do
-      use Phoenix.LiveView,
-        layout: {NervesHubWeb.LayoutView, :live}
+      use Gettext, backend: NervesHubWeb.Gettext
 
       # HTML escaping functionality
       import Phoenix.HTML
-      # Translation
-      import NervesHubWeb.Gettext
 
-      import NervesHub.Helpers.Authorization
+      import NervesHubWeb.Helpers.Authorization
 
       # Shortcut for generating JS commands
       alias Phoenix.LiveView.JS
@@ -127,10 +94,35 @@ defmodule NervesHubWeb do
       unquote(verified_routes())
 
       unquote(view_helpers())
+
+      on_mount(Sentry.LiveViewHook)
+
+      def ok(socket), do: {:ok, socket}
+
+      def noreply(socket), do: {:noreply, socket}
+
+      def page_title(socket, page_title), do: assign(socket, :page_title, page_title)
+
+      def sidebar_tab(socket, tab) do
+        socket
+        |> assign(:sidebar_tab, tab)
+        |> assign(:tab_hint, tab)
+      end
+
+      def send_toast(socket, kind, msg) do
+        NervesHubWeb.LiveToast.send_toast(kind, msg)
+        socket
+      end
+
+      def whitelist(params, keys) do
+        keys
+        |> Enum.filter(fn x -> !is_nil(params[to_string(x)]) end)
+        |> Enum.into(%{}, fn x -> {x, params[to_string(x)]} end)
+      end
     end
   end
 
-  def verified_routes do
+  def verified_routes() do
     quote do
       use Phoenix.VerifiedRoutes,
         endpoint: NervesHubWeb.Endpoint,
@@ -139,21 +131,73 @@ defmodule NervesHubWeb do
     end
   end
 
-  def live_component do
+  def live_component() do
     quote do
       use Phoenix.LiveComponent
+
+      import NervesHubWeb.Helpers.Authorization
+
+      def ok(socket), do: {:ok, socket}
+
+      def noreply(socket), do: {:noreply, socket}
+
+      def page_title(socket, page_title), do: assign(socket, :page_title, page_title)
+
+      def sidebar_tab(socket, tab) do
+        socket
+        |> assign(:sidebar_tab, tab)
+        |> assign(:tab_hint, tab)
+      end
+
+      def send_toast(socket, kind, msg) do
+        NervesHubWeb.LiveToast.send_toast(kind, msg)
+        socket
+      end
+
+      # Routes generation with the ~p sigil
+      unquote(verified_routes())
 
       unquote(view_helpers())
     end
   end
 
-  def view do
+  def html() do
+    quote do
+      use Phoenix.Component
+
+      # Import convenience functions from controllers
+      import Phoenix.Controller,
+        only: [get_csrf_token: 0, view_module: 1, view_template: 1]
+
+      # Include general helpers for rendering HTML
+      unquote(html_helpers())
+    end
+  end
+
+  defp html_helpers() do
+    quote do
+      # HTML escaping functionality
+      import Phoenix.HTML
+      # Core UI components and translation
+      import NervesHubWeb.CoreComponents
+      import NervesHubWeb.Gettext
+
+      # Shortcut for generating JS commands
+      alias Phoenix.LiveView.JS
+
+      # Routes generation with the ~p sigil
+      unquote(verified_routes())
+    end
+  end
+
+  def view() do
     quote do
       use Phoenix.View,
         root: "lib/nerves_hub_web/templates",
         namespace: NervesHubWeb
 
-      alias NervesHubWeb.{DeviceLive, Endpoint}
+      alias NervesHubWeb.DeviceLive
+      alias NervesHubWeb.Endpoint
 
       alias NervesHubWeb.Components.Navigation
 
@@ -167,20 +211,24 @@ defmodule NervesHubWeb do
 
       # Include shared imports and aliases for views
       unquote(view_helpers())
+
+      # Routes generation with the ~p sigil
+      unquote(verified_routes())
     end
   end
 
-  def api_view do
+  def api_view() do
     quote do
       use Phoenix.View,
         root: "lib/nerves_hub_web/templates",
         namespace: NervesHubWeb
 
+      use Gettext, backend: NervesHubWeb.Gettext
+
       # Import convenience functions from controllers
       import Phoenix.Controller, only: [get_flash: 2, view_module: 1]
 
       import NervesHubWeb.ErrorHelpers
-      import NervesHubWeb.Gettext
 
       alias NervesHubWeb.Router.Helpers, as: Routes
 
@@ -192,7 +240,7 @@ defmodule NervesHubWeb do
     end
   end
 
-  def component do
+  def component() do
     quote do
       use Phoenix.Component
 
@@ -201,7 +249,7 @@ defmodule NervesHubWeb do
     end
   end
 
-  def router do
+  def router() do
     quote do
       use Phoenix.Router
       import Plug.Conn
@@ -210,17 +258,18 @@ defmodule NervesHubWeb do
     end
   end
 
-  def channel do
+  def channel() do
     quote do
       use Phoenix.Channel
-      import NervesHubWeb.Gettext
+      use Gettext, backend: NervesHubWeb.Gettext
     end
   end
 
-  defp view_helpers do
+  defp view_helpers() do
     quote do
       # Use all HTML functionality (forms, tags, etc)
       use Phoenix.HTML
+      use Gettext, backend: NervesHubWeb.Gettext
 
       # Import LiveView helpers (live_render, live_component, live_patch, etc)
       import Phoenix.LiveView.Helpers
@@ -229,7 +278,6 @@ defmodule NervesHubWeb do
       import Phoenix.View
 
       import NervesHubWeb.ErrorHelpers
-      import NervesHubWeb.Gettext
       alias NervesHubWeb.Router.Helpers, as: Routes
     end
   end

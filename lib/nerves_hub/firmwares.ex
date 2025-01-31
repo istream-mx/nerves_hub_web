@@ -2,15 +2,19 @@ defmodule NervesHub.Firmwares do
   import Ecto.Query
 
   alias Ecto.Changeset
-  alias NervesHub.Accounts.OrgKey
+
   alias NervesHub.Accounts.Org
+  alias NervesHub.Accounts.OrgKey
   alias NervesHub.Devices.Device
   alias NervesHub.Firmwares.Firmware
-  alias NervesHub.Firmwares.FirmwareMetadata
   alias NervesHub.Firmwares.FirmwareDelta
+  alias NervesHub.Firmwares.FirmwareMetadata
   alias NervesHub.Firmwares.FirmwareTransfer
+  alias NervesHub.Fwup
   alias NervesHub.Products
   alias NervesHub.Products.Product
+  alias NervesHub.Workers.DeleteFirmware
+
   alias NervesHub.Repo
 
   require Logger
@@ -24,21 +28,59 @@ defmodule NervesHub.Firmwares do
     Firmware
     |> where([f], f.product_id == ^product_id)
     |> order_by([f], [fragment("? collate numeric desc", f.version), desc: :inserted_at])
-    |> Firmware.with_product()
+    |> with_product()
     |> Repo.all()
   end
+
+  @spec filter(Product.t(), map()) ::
+          {:ok, {[Product.t()], Flop.Meta.t()}} | {:error, Flop.Meta.t()}
+  def filter(product_id, opts \\ %{}) do
+    opts = Map.reject(opts, fn {_key, val} -> is_nil(val) end)
+
+    sort = Map.get(opts, :sort, "inserted_at")
+    sort_direction = Map.get(opts, :sort_direction, "asc")
+
+    sort_opts = {String.to_existing_atom(sort_direction), String.to_atom(sort)}
+
+    flop = %Flop{
+      page: String.to_integer(Map.get(opts, :page, "1")),
+      page_size: String.to_integer(Map.get(opts, :page_size, "25"))
+    }
+
+    subquery =
+      Device
+      |> select([d], %{
+        firmware_uuid: fragment("? ->> 'uuid'", d.firmware_metadata),
+        install_count: count(fragment("? ->> 'uuid'", d.firmware_metadata), :distinct)
+      })
+      |> where([d], not is_nil(d.firmware_metadata))
+      |> where([d], not is_nil(fragment("? ->> 'uuid'", d.firmware_metadata)))
+      |> Repo.exclude_deleted()
+      |> group_by([d], fragment("? ->> 'uuid'", d.firmware_metadata))
+
+    Firmware
+    |> join(:left, [f], d in subquery(subquery), on: d.firmware_uuid == f.uuid)
+    |> where([f], f.product_id == ^product_id)
+    |> sort_devices(sort_opts)
+    |> select_merge([_f, d], %{install_count: d.install_count})
+    |> Flop.run(flop)
+  end
+
+  defp sort_devices(query, {direction, :install_count}) do
+    order_by(query, [_f, d], {^direction, d.install_count})
+  end
+
+  defp sort_devices(query, sort), do: order_by(query, ^sort)
 
   def get_firmwares_for_deployment(deployment) do
     deployment = Repo.preload(deployment, [:firmware])
 
-    from(
-      f in Firmware,
-      where: f.product_id == ^deployment.product_id,
-      where: f.platform == ^deployment.firmware.platform,
-      where: f.architecture == ^deployment.firmware.architecture,
-      order_by: [fragment("? collate numeric desc", f.version), desc: :inserted_at]
-    )
-    |> Firmware.with_product()
+    Firmware
+    |> where([f], f.product_id == ^deployment.product_id)
+    |> where([f], f.platform == ^deployment.firmware.platform)
+    |> where([f], f.architecture == ^deployment.firmware.architecture)
+    |> order_by([f], [fragment("? collate numeric desc", f.version), desc: :inserted_at])
+    |> with_product()
     |> Repo.all()
   end
 
@@ -59,13 +101,10 @@ defmodule NervesHub.Firmwares do
           {:ok, Firmware.t()}
           | {:error, :not_found}
   def get_firmware(%Org{id: org_id}, id) do
-    from(
-      f in Firmware,
-      where: f.id == ^id,
-      join: p in assoc(f, :product),
-      where: p.org_id == ^org_id
-    )
-    |> Firmware.with_product()
+    Firmware
+    |> with_product()
+    |> where([f], f.id == ^id)
+    |> where([f, p], p.org_id == ^org_id)
     |> Repo.one()
     |> case do
       nil -> {:error, :not_found}
@@ -89,49 +128,40 @@ defmodule NervesHub.Firmwares do
 
   @spec get_firmware_by_org_id(non_neg_integer()) :: [Firmware.t()]
   def get_firmware_by_org_id(org_id) do
-    q =
-      from(
-        f in Firmware,
-        join: p in assoc(f, :product),
-        where: p.org_id == ^org_id
-      )
-
-    Repo.all(q)
-  end
-
-  @spec get_firmware_by_product_and_version(Org.t(), String.t(), String.t()) ::
-          {:ok, Firmware.t()}
-          | {:error, :not_found}
-  def get_firmware_by_product_and_version(%Org{} = org, product, version) do
     Firmware
-    |> Repo.get_by(org_id: org.id, product: product, version: version)
-    |> case do
-      nil -> {:error, :not_found}
-      firmware -> {:ok, firmware}
-    end
+    |> with_product()
+    |> where([f, p], p.org_id == ^org_id)
+    |> Repo.all()
   end
 
-  @spec get_firmware_by_uuid(String.t()) :: [Firmware.t()]
+  @spec get_firmware_by_uuid(String.t()) :: Firmware.t() | nil
   def get_firmware_by_uuid(uuid) do
     Repo.get_by(Firmware, uuid: uuid)
+  end
+
+  @spec get_firmware_by_product_and_uuid!(Product.t(), String.t()) :: Firmware.t()
+  def get_firmware_by_product_and_uuid!(product, uuid) do
+    get_firmware_by_product_and_uuid_query(product, uuid)
+    |> Repo.one!()
   end
 
   @spec get_firmware_by_product_and_uuid(Product.t(), String.t()) ::
           {:ok, Firmware.t()}
           | {:error, :not_found}
-  def get_firmware_by_product_and_uuid(%Product{id: product_id}, uuid) do
-    from(
-      f in Firmware,
-      where: f.uuid == ^uuid,
-      join: p in assoc(f, :product),
-      preload: [product: p],
-      where: p.id == ^product_id
-    )
+  def get_firmware_by_product_and_uuid(product, uuid) do
+    get_firmware_by_product_and_uuid_query(product, uuid)
     |> Repo.one()
     |> case do
       nil -> {:error, :not_found}
       firmware -> {:ok, firmware}
     end
+  end
+
+  defp get_firmware_by_product_and_uuid_query(%Product{id: product_id}, uuid) do
+    Firmware
+    |> with_product()
+    |> where([f], f.uuid == ^uuid)
+    |> where([f, p], p.id == ^product_id)
   end
 
   @spec create_firmware(
@@ -149,6 +179,7 @@ defmodule NervesHub.Firmwares do
         with {:ok, params} <- build_firmware_params(org, filepath),
              {:ok, firmware} <- insert_firmware(params),
              :ok <- upload_file_2.(filepath, firmware.upload_metadata) do
+          _ = NervesHubWeb.Endpoint.broadcast("firmware", "created", %{firmware: firmware})
           firmware
         else
           {:error, error} ->
@@ -156,7 +187,7 @@ defmodule NervesHub.Firmwares do
             Repo.rollback(error)
         end
       end,
-      timeout: 30_000
+      timeout: 60_000
     )
   end
 
@@ -169,7 +200,7 @@ defmodule NervesHub.Firmwares do
 
     do_delete_from_s3 = fn ->
       firmware.upload_metadata
-      |> NervesHub.Workers.DeleteFirmware.new()
+      |> DeleteFirmware.new()
       |> Oban.insert()
     end
 
@@ -192,7 +223,7 @@ defmodule NervesHub.Firmwares do
   def verify_signature(filepath, keys) when is_binary(filepath) do
     signed_key =
       Enum.find(keys, fn %{key: key} ->
-        case System.cmd("fwup", ["--verify", "--public-key", key, "-i", filepath]) do
+        case System.cmd("fwup", ["--verify", "--public-key", key, "-i", filepath], env: []) do
           {_, 0} ->
             true
 
@@ -216,23 +247,6 @@ defmodule NervesHub.Firmwares do
     end
   end
 
-  def metadata_from_conn(%Plug.Conn{} = conn) do
-    params = %{
-      uuid: get_metadata_req_header(conn, "uuid"),
-      architecture: get_metadata_req_header(conn, "architecture"),
-      platform: get_metadata_req_header(conn, "platform"),
-      product: get_metadata_req_header(conn, "product"),
-      version: get_metadata_req_header(conn, "version"),
-      author: get_metadata_req_header(conn, "author"),
-      description: get_metadata_req_header(conn, "description"),
-      fwup_version: get_metadata_req_header(conn, "fwup-version"),
-      vcs_identifier: get_metadata_req_header(conn, "vcs-identifier"),
-      misc: get_metadata_req_header(conn, "misc")
-    }
-
-    metadata_or_firmware(params)
-  end
-
   @doc """
   Returns metadata for a Firmware struct
   """
@@ -253,37 +267,6 @@ defmodule NervesHub.Firmwares do
     }
 
     {:ok, metadata}
-  end
-
-  @doc """
-  Same as `metadata_from_firmware/1` but takes a file path instead of a firmware struct
-  """
-  @spec metadata_from_fwup(Path.t()) :: {:ok, FirmwareMetadata.metadata()} | {:error, any()}
-  def metadata_from_fwup(firmware_file) do
-    with {:ok, fwup_metadata} <- get_fwup_metadata(firmware_file),
-         {:ok, uuid} <- fetch_fwup_metadata_value(fwup_metadata, "meta-uuid"),
-         {:ok, architecture} <- fetch_fwup_metadata_value(fwup_metadata, "meta-architecture"),
-         {:ok, platform} <- fetch_fwup_metadata_value(fwup_metadata, "meta-platform"),
-         {:ok, product} <- fetch_fwup_metadata_value(fwup_metadata, "meta-product"),
-         {:ok, version} <- fetch_fwup_metadata_value(fwup_metadata, "meta-version"),
-         author <- get_fwup_metadata_value(fwup_metadata, "meta-author"),
-         description <- get_fwup_metadata_value(fwup_metadata, "meta-description"),
-         misc <- get_fwup_metadata_value(fwup_metadata, "meta-misc"),
-         vcs_identifier <- get_fwup_metadata_value(fwup_metadata, "meta-vcs-identifier") do
-      metadata = %{
-        architecture: architecture,
-        author: author,
-        description: description,
-        misc: misc,
-        platform: platform,
-        product: product,
-        uuid: uuid,
-        vcs_identifier: vcs_identifier,
-        version: version
-      }
-
-      {:ok, metadata}
-    end
   end
 
   def metadata_from_device(metadata) do
@@ -309,19 +292,6 @@ defmodule NervesHub.Firmwares do
     |> Repo.insert()
   end
 
-  def get_firmware_transfers_by_org_id_between_dates(org_id, from_datetime, to_datetime) do
-    q =
-      from(
-        ft in FirmwareTransfer,
-        where:
-          ft.org_id == ^org_id and
-            ft.timestamp >= ^from_datetime and
-            ft.timestamp <= ^to_datetime
-      )
-
-    Repo.all(q)
-  end
-
   @spec get_firmware_delta(integer()) ::
           {:ok, FirmwareDelta.t()}
           | {:error, :not_found}
@@ -344,15 +314,11 @@ defmodule NervesHub.Firmwares do
           {:ok, FirmwareDelta.t()}
           | {:error, :not_found}
   def get_firmware_delta_by_source_and_target(source_id, target_id) do
-    q =
-      from(
-        fd in FirmwareDelta,
-        where:
-          fd.source_id == ^source_id and
-            fd.target_id == ^target_id
-      )
-
-    case Repo.one(q) do
+    FirmwareDelta
+    |> where([fd], source_id: ^source_id)
+    |> where([fd], target_id: ^target_id)
+    |> Repo.one()
+    |> case do
       nil -> {:error, :not_found}
       firmware_delta -> {:ok, firmware_delta}
     end
@@ -370,6 +336,10 @@ defmodule NervesHub.Firmwares do
           | {:error, Changeset.t()}
 
   def create_firmware_delta(source_firmware, target_firmware) do
+    Logger.info(
+      "Creating firmware delta between #{source_firmware.uuid} and #{target_firmware.uuid}."
+    )
+
     %Firmware{org: org} = source_firmware |> Repo.preload(:org)
     {:ok, source_url} = firmware_upload_config().download_file(source_firmware)
     {:ok, target_url} = firmware_upload_config().download_file(target_firmware)
@@ -390,9 +360,19 @@ defmodule NervesHub.Firmwares do
              {:ok, firmware_delta} <- get_firmware_delta(firmware_delta.id),
              :ok <- firmware_upload_config().upload_file(firmware_delta_path, upload_metadata),
              :ok <- delta_updater().cleanup_firmware_delta_files(firmware_delta_path) do
+          Logger.info(
+            "Created firmware delta between #{source_firmware.uuid} and #{target_firmware.uuid}, successfully."
+          )
+
           firmware_delta
         else
           {:error, error} ->
+            delta_updater().cleanup_firmware_delta_files(firmware_delta_path)
+
+            Logger.error(
+              "Failed to create firmware delta between #{source_firmware.uuid} and #{target_firmware.uuid}: #{inspect(error)}"
+            )
+
             Repo.rollback(error)
         end
       end,
@@ -401,6 +381,12 @@ defmodule NervesHub.Firmwares do
   end
 
   # Private functions
+
+  defp with_product(query) do
+    query
+    |> join(:left, [f], p in assoc(f, :product))
+    |> preload([d, p], product: p)
+  end
 
   def insert_firmware_delta(params) do
     %FirmwareDelta{}
@@ -419,7 +405,7 @@ defmodule NervesHub.Firmwares do
     org = NervesHub.Repo.preload(org, :org_keys)
 
     with {:ok, %{id: org_key_id}} <- verify_signature(filepath, org.org_keys),
-         {:ok, metadata} <- metadata_from_fwup(filepath) do
+         {:ok, metadata} <- Fwup.metadata(filepath) do
       filename = metadata.uuid <> ".fw"
 
       params =
@@ -447,18 +433,12 @@ defmodule NervesHub.Firmwares do
   end
 
   defp resolve_product(params) do
-    params.org_id
-    |> Products.get_product_by_org_id_and_name(params.product_name)
-    |> case do
-      {:ok, product} -> Map.put(params, :product_id, product.id)
-      _ -> params
-    end
+    case Products.get_product_by_org_id_and_name(params.org_id, params.product_name) do
+      {:ok, product} ->
+        Map.put(params, :product_id, product.id)
 
-    with {:ok, product} <-
-           Products.get_product_by_org_id_and_name(params.org_id, params.product_name) do
-      Map.put(params, :product_id, product.id)
-    else
-      _ -> params
+      _ ->
+        params
     end
   end
 
@@ -482,48 +462,6 @@ defmodule NervesHub.Firmwares do
                 metadata_from_firmware(firmware)
             end
         end
-    end
-  end
-
-  @typep metadata_string() :: String.t()
-  @typep metadata_key() :: String.t()
-  @typep metadata_value() :: String.t() | nil
-
-  @spec get_fwup_metadata(Path.t()) :: {:ok, metadata_string()} | {:error, String.t()}
-  defp get_fwup_metadata(filepath) do
-    case System.cmd("fwup", ["-m", "-i", filepath]) do
-      {metadata, 0} ->
-        {:ok, metadata}
-
-      {error, _} ->
-        {:error, error}
-    end
-  end
-
-  @spec fetch_fwup_metadata_value(metadata_string(), metadata_key()) ::
-          {:ok, metadata_value()} | {:error, {metadata_key(), :not_found}}
-  defp fetch_fwup_metadata_value(metadata, key) when is_binary(key) do
-    {:ok, regex} = "#{key}=\"(?<value>[^\n]+)\"" |> Regex.compile()
-
-    case Regex.named_captures(regex, metadata) do
-      %{"value" => value} -> {:ok, value}
-      _ -> {:error, {key, :not_found}}
-    end
-  end
-
-  @spec get_fwup_metadata_value(metadata_string(), metadata_key()) :: metadata_value()
-  defp get_fwup_metadata_value(metadata, key) when is_binary(key) do
-    case fetch_fwup_metadata_value(metadata, key) do
-      {:ok, metadata_item} -> metadata_item
-      {:error, {_, :not_found}} -> nil
-    end
-  end
-
-  defp get_metadata_req_header(conn, header) do
-    case Plug.Conn.get_req_header(conn, "x-nerveshub-#{header}") do
-      [] -> nil
-      ["" | _] -> nil
-      [value | _] -> value
     end
   end
 

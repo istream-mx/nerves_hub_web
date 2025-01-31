@@ -2,7 +2,7 @@ defmodule NervesHubWeb.API.KeyController do
   use NervesHubWeb, :api_controller
 
   alias NervesHub.Accounts
-  alias NervesHub.Accounts.{OrgKey}
+  alias NervesHub.Accounts.OrgKey
 
   action_fallback(NervesHubWeb.API.FallbackController)
 
@@ -14,10 +14,11 @@ defmodule NervesHubWeb.API.KeyController do
     render(conn, "index.json", keys: keys)
   end
 
-  def create(%{assigns: %{org: org}} = conn, params) do
+  def create(%{assigns: %{user: user, org: org}} = conn, params) do
     params =
       Map.take(params, ["name", "key"])
       |> Map.put("org_id", org.id)
+      |> Map.put("created_by_id", user.id)
 
     with {:ok, key} <- Accounts.create_org_key(params) do
       conn

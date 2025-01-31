@@ -1,6 +1,10 @@
 defmodule NervesHub.SSL do
-  alias NervesHub.Devices
+  @moduledoc """
+  Custom SSL peer cert verification for Devices.
+  """
+
   alias NervesHub.Certificate
+  alias NervesHub.Devices
 
   @type pkix_path_validation_reason ::
           :cert_expired
@@ -9,7 +13,7 @@ defmodule NervesHub.SSL do
           | :name_not_permitted
           | :missing_basic_constraint
           | :invalid_key_usage
-          | {:revoked, :public_key.crl_reason()}
+          | {:revoked, any()}
   @type reason ::
           :unknown_ca
           | :unknown_server_error
@@ -27,7 +31,7 @@ defmodule NervesHub.SSL do
           | :valid_peer
 
   @spec verify_fun(X509.Certificate.t(), event(), any()) ::
-          {:valid, any()} | {:fail, reason()} | {:unknown, any()}
+          {:valid, any()} | {:fail, reason()}
   # The certificate is a valid_peer, which means it has been
   # signed by the NervesHub CA and the signer cert is still valid
   # or the signer cert was included by the client and is valid
@@ -144,7 +148,7 @@ defmodule NervesHub.SSL do
            ),
          {:ok, device} <- maybe_jitp_device(cn, db_ca),
          :ok <- check_new_public_key_allowed(device),
-         params = params_from_otp_cert(otp_cert) do
+         params <- params_from_otp_cert(otp_cert) do
       Devices.create_device_certificate(device, params)
     end
   end
@@ -163,7 +167,7 @@ defmodule NervesHub.SSL do
            :public_key.pkix_path_validation(db_ca.der, [der],
              verify_fun: {&path_verify/3, verify_state}
            ),
-         params = params_from_otp_cert(otp_cert) do
+         params <- params_from_otp_cert(otp_cert) do
       Devices.create_device_certificate(device, params)
     end
   end

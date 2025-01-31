@@ -12,7 +12,7 @@ defmodule NervesHub.Firmwares.Upload.S3 do
   def upload_file(source_path, %{"s3_key" => s3_key}) do
     source_path
     |> S3.Upload.stream_file()
-    |> S3.upload(bucket(), s3_key)
+    |> S3.upload(bucket(), s3_key, timeout: 60_000)
     |> ExAws.request()
     |> case do
       {:ok, _} -> :ok
@@ -24,8 +24,10 @@ defmodule NervesHub.Firmwares.Upload.S3 do
   def download_file(firmware) do
     s3_key = firmware.upload_metadata["s3_key"]
 
+    opts = Keyword.merge(presigned_url_opts(), expires_in: @firmware_url_validity_time)
+
     ExAws.Config.new(:s3)
-    |> S3.presigned_url(:get, bucket(), s3_key, expires_in: @firmware_url_validity_time)
+    |> S3.presigned_url(:get, bucket(), s3_key, opts)
     |> case do
       {:ok, url} ->
         {:ok, url}
@@ -53,8 +55,12 @@ defmodule NervesHub.Firmwares.Upload.S3 do
     %{"s3_key" => Path.join([key_prefix(), Integer.to_string(org_id), filename])}
   end
 
-  def bucket do
+  def bucket() do
     Application.get_env(:nerves_hub, __MODULE__)[:bucket]
+  end
+
+  defp presigned_url_opts() do
+    Application.get_env(:nerves_hub, __MODULE__)[:presigned_url_opts]
   end
 
   def key_prefix() do
