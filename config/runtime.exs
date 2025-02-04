@@ -112,7 +112,6 @@ if config_env() == :prod do
 
     https_port = String.to_integer(System.get_env("DEVICE_PORT", "443"))
 
-
     # keyfile =
     #   if System.get_env("DEVICE_SSL_KEY") do
     #     ssl_key = System.fetch_env!("DEVICE_SSL_KEY") |> Base.decode64!()
@@ -122,14 +121,12 @@ if config_env() == :prod do
     #   else
     #     ssl_keyfile = System.get_env("DEVICE_SSL_KEYFILE", "/etc/ssl/#{host}-key.pem")
 
-
     #     if File.exists?(ssl_keyfile) do
     #       ssl_keyfile
     #     else
     #       raise "Could not find keyfile"
     #     end
     #   end
-
 
     # certfile =
     #   if encoded_cert = System.get_env("DEVICE_SSL_CERT") do
@@ -139,7 +136,6 @@ if config_env() == :prod do
     #     "/app/tmp/ssl_cert.crt"
     #   else
     #     ssl_certfile = System.get_env("DEVICE_SSL_CERTFILE", "/etc/ssl/#{host}.pem")
-
 
     #     if File.exists?(ssl_certfile) do
     #       ssl_certfile
@@ -159,15 +155,15 @@ if config_env() == :prod do
     #     CAStore.file_path()
     #   end
 
-    transport_options = [
-      verify: :verify_peer,
-      verify_fun: {&NervesHub.SSL.verify_fun/3, nil},
-      fail_if_no_peer_cert: false,
-      keyfile: keyfile,
-      certfile: certfile,
-      cacertfile: cacertfile,
-      hibernate_after: 15_000
-    ]
+    # transport_options = [
+    #   verify: :verify_peer,
+    #   verify_fun: {&NervesHub.SSL.verify_fun/3, nil},
+    #   fail_if_no_peer_cert: false,
+    #   keyfile: keyfile,
+    #   certfile: certfile,
+    #   cacertfile: cacertfile,
+    #   hibernate_after: 15_000
+    # ]
 
     # Older versions of OTP 25 may break using using devices
     # that support TLS 1.3 or 1.2 negotiation. To mitigate that
@@ -176,28 +172,28 @@ if config_env() == :prod do
     # allow TLS 1.3 and setting `certificate_authorities: false` since we
     # don't expect devices to send full chains to the server
     # See https://github.com/erlang/otp/issues/6492#issuecomment-1323874205
-    transport_options =
-      if System.get_env("DEVICE_ENABLE_TLS_13", "false") == "true" do
-        transport_options ++ [certificate_authorities: false]
-      else
-        transport_options ++ [versions: [:"tlsv1.2"]]
-      end
+    # transport_options =
+    #   if System.get_env("DEVICE_ENABLE_TLS_13", "false") == "true" do
+    #     transport_options ++ [certificate_authorities: false]
+    #   else
+    #     transport_options ++ [versions: [:"tlsv1.2"]]
+    #   end
 
     config :nerves_hub, NervesHubWeb.DeviceEndpoint,
       url: [host: host],
+      http: [ip: {0, 0, 0, 0}, port: 4001]
 
-      http: [ip: {0, 0, 0, 0}, port: 4001],
-      https: [
-        port: https_port,
-        otp_app: :nerves_hub,
-        http_options: [
-          log_protocol_errors: false
-        ],
-        thousand_island_options: [
-          transport_module: NervesHub.DeviceSSLTransport,
-          transport_options: transport_options
-        ]
-      ]
+    # https: [
+    #   port: https_port,
+    #   otp_app: :nerves_hub,
+    #   http_options: [
+    #     log_protocol_errors: false
+    #   ],
+    #   thousand_island_options: [
+    #     transport_module: NervesHub.DeviceSSLTransport,
+    #     transport_options: transport_options
+    #   ]
+    # ]
   end
 
   config :nerves_hub, NervesHubWeb.DeviceSocket,
@@ -210,8 +206,6 @@ end
 # Database and Libcluster connection settings
 #
 if config_env() == :prod do
-
-
   database_ssl_opts =
     if System.get_env("DATABASE_SSL", "true") == "true" do
       if System.get_env("DATABASE_PEM") do
@@ -245,7 +239,6 @@ if config_env() == :prod do
     url: System.fetch_env!("DATABASE_URL"),
     ssl: database_ssl_opts,
     pool_size: String.to_integer(System.get_env("DATABASE_POOL_SIZE", "20")),
-
     socket_options: database_socket_options,
     queue_target: 5000
 
@@ -274,7 +267,6 @@ if config_env() == :prod do
     |> Keyword.merge(ssl: database_ssl_opts)
     |> Keyword.merge(parameters: [])
     |> Keyword.merge(channel_name: "nerves_hub_clustering")
-
 
   # config :libcluster,
   #   topologies: [
