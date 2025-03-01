@@ -110,7 +110,7 @@ if config_env() == :prod do
     #   else
     #     CAStore.file_path()
     #   end
-    device_endpoint_port = String.to_integer(System.get_env("WEB_PORT", "4001"))
+    device_endpoint_port = String.to_integer(System.get_env("DEVICE_PORT", "4001"))
 
     config :nerves_hub, NervesHubWeb.DeviceEndpoint,
       url: [host: host],
