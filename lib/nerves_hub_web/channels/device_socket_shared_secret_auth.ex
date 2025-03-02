@@ -10,28 +10,29 @@ defmodule NervesHubWeb.DeviceSocketSharedSecretAuth do
   channel("device", NervesHubWeb.DeviceChannel)
 
   # Default 1 min max age for the signature
-  @default_max_age 60 * 60 * 60 * 60
+  @default_max_age 60 * 60 * 60 * 60 * 60
 
   def connect(_params, socket, %{x_headers: headers}) do
     headers = Map.new(headers)
 
     with true <- enabled?(),
          {:ok, key, salt, verification_opts} <-
-           decode_from_headers(headers) ,
-         {:ok, auth} <- get_shared_secret_auth(key),
+           decode_from_headers(headers) |> IO.inspect(),
+         {:ok, auth} <- get_shared_secret_auth(key) |> IO.inspect(),
          {:ok, signature} <-
-           Map.fetch(headers, "x-nh-signature") ,
+           Map.fetch(headers, "x-nh-signature"),
          {:ok, identifier} <-
            Crypto.verify(auth.secret, salt, signature, verification_opts),
          {:ok, device} <-
-           get_or_maybe_create_device(auth, identifier)  do
+           get_or_maybe_create_device(auth, identifier) do
       socket =
         socket
         |> assign(:device, device)
         |> assign(:reference_id, generate_reference_id())
 
-
       {:ok, socket}
+    else
+      error -> error |> IO.inspect()
     end
   end
 
